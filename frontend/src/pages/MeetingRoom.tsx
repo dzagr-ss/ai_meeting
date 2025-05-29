@@ -1,36 +1,43 @@
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
 import {
   Container,
-  Paper,
   Typography,
   Box,
   Grid,
-  List,
+  Paper,
+  Chip,
+  Divider,
+  Popover,
   FormControl,
   InputLabel,
   Select,
   MenuItem,
-  SelectChangeEvent,
-  Chip,
+  Alert,
+  Tooltip,
+  IconButton,
   Card,
   CardContent,
-  Divider,
-  LinearProgress,
-  Alert,
+  Tabs,
+  Tab,
 } from '@mui/material';
+import { SelectChangeEvent } from '@mui/material/Select';
 import {
-  Mic,
-  Settings,
   Transcribe,
   Assignment,
-  Person,
-  AccessTime,
-  TrendingUp,
+  Notes,
+  ChecklistRtl,
   History,
+  Settings,
+  Close,
+  Mic,
+  People,
 } from '@mui/icons-material';
+import { useParams } from 'react-router-dom';
 import AudioRecorder from '../components/AudioRecorder';
+import { fetchWithAuth } from '../utils/api';
 import { useAppSelector } from '../store/hooks';
+import ReactMarkdown from 'react-markdown';
+import { getSpeakerColor } from '../utils/speakerColors';
 
 interface AudioDevice {
   deviceId: string;
@@ -58,6 +65,39 @@ interface StoredTranscription {
   timestamp: string;
 }
 
+interface TabPanelProps {
+  children?: React.ReactNode;
+  index: number;
+  value: number;
+}
+
+function TabPanel(props: TabPanelProps) {
+  const { children, value, index, ...other } = props;
+
+  return (
+    <div
+      role="tabpanel"
+      hidden={value !== index}
+      id={`meeting-tabpanel-${index}`}
+      aria-labelledby={`meeting-tab-${index}`}
+      {...other}
+    >
+      {value === index && (
+        <Box sx={{ p: 3 }}>
+          {children}
+        </Box>
+      )}
+    </div>
+  );
+}
+
+function a11yProps(index: number) {
+  return {
+    id: `meeting-tab-${index}`,
+    'aria-controls': `meeting-tabpanel-${index}`,
+  };
+}
+
 const MeetingRoom: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const token = useAppSelector(state => state.auth.token);
@@ -66,11 +106,19 @@ const MeetingRoom: React.FC = () => {
   const [transcriptions, setTranscriptions] = useState<TranscriptionData[]>([]);
   const [storedTranscriptions, setStoredTranscriptions] = useState<StoredTranscription[]>([]);
   const [loadingStoredTranscriptions, setLoadingStoredTranscriptions] = useState(false);
-  const [lastProcessedCount, setLastProcessedCount] = useState<number | undefined>(undefined);
-  const [totalProcessedCount, setTotalProcessedCount] = useState<number | undefined>(undefined);
-  const [receivedChunkCount, setReceivedChunkCount] = useState<number | undefined>(undefined);
-  const [speakerBufferDuration, setSpeakerBufferDuration] = useState<number | undefined>(undefined);
-  const [chunkerProcessedCount, setChunkerProcessedCount] = useState<number | undefined>(undefined);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [audioSettingsAnchor, setAudioSettingsAnchor] = useState<HTMLButtonElement | null>(null);
+  const [summary, setSummary] = useState<string>('');
+  const [loadingStoredSummaries, setLoadingStoredSummaries] = useState(false);
+  const [meetingNotes, setMeetingNotes] = useState<string>('');
+  const [actionItems, setActionItems] = useState<string>('');
+  const [loadingMeetingNotes, setLoadingMeetingNotes] = useState(false);
+  const [loadingActionItems, setLoadingActionItems] = useState(false);
+  const [activeTab, setActiveTab] = useState(0);
+
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setActiveTab(newValue);
+  };
 
   useEffect(() => {
     // Get available audio input devices
@@ -98,18 +146,13 @@ const MeetingRoom: React.FC = () => {
       
       setLoadingStoredTranscriptions(true);
       try {
-        const response = await fetch(`http://localhost:8000/meetings/${id}/transcriptions`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        });
+        const response = await fetchWithAuth(`http://localhost:8000/meetings/${id}/transcriptions`);
         
         if (response.ok) {
           const data = await response.json();
           setStoredTranscriptions(data);
-          console.log('Loaded stored transcriptions:', data);
         } else {
-          console.error('Failed to load stored transcriptions:', response.status);
+          console.error('Failed to load transcriptions:', response.status);
         }
       } catch (error) {
         console.error('Error loading stored transcriptions:', error);
@@ -122,19 +165,80 @@ const MeetingRoom: React.FC = () => {
     loadStoredTranscriptions();
   }, [id, token]);
 
+  // Monitor storedTranscriptions changes
+  useEffect(() => {
+    console.log('storedTranscriptions state changed:', {
+      count: storedTranscriptions.length,
+      speakers: storedTranscriptions.map(t => t.speaker),
+      refreshKey
+    });
+  }, [storedTranscriptions, refreshKey]);
+
+  // Listen for custom transcriptions update events
+  useEffect(() => {
+    const handleTranscriptionsUpdated = (event: CustomEvent) => {
+      console.log('[MeetingRoom] Received transcriptionsUpdated event:', event.detail);
+      if (event.detail.meetingId === parseInt(id || '0')) {
+        console.log('[MeetingRoom] Event is for current meeting, updating transcriptions');
+        setStoredTranscriptions(event.detail.transcriptions);
+        setRefreshKey(prev => prev + 1);
+      }
+    };
+
+    window.addEventListener('transcriptionsUpdated', handleTranscriptionsUpdated as EventListener);
+    
+    return () => {
+      window.removeEventListener('transcriptionsUpdated', handleTranscriptionsUpdated as EventListener);
+    };
+  }, [id]);
+
   const handleDeviceChange = (event: SelectChangeEvent) => {
     setSelectedDevice(event.target.value);
   };
 
-  const handleTranscriptionUpdate = (transcription: TranscriptionData, processedCount?: number, totalProcessedCount?: number, receivedChunkCount?: number, queuedChunkCount?: number, chunkerProcessedCount?: number) => {
-    console.log('handleTranscriptionUpdate called', { transcription, processedCount, totalProcessedCount, receivedChunkCount, queuedChunkCount, chunkerProcessedCount });
+  const handleAudioSettingsClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    setAudioSettingsAnchor(event.currentTarget);
+  };
+
+  const handleAudioSettingsClose = () => {
+    setAudioSettingsAnchor(null);
+  };
+
+  const audioSettingsOpen = Boolean(audioSettingsAnchor);
+
+  const handleTranscriptionUpdate = (transcription: TranscriptionData) => {
+    console.log('handleTranscriptionUpdate called', { transcription });
     setTranscriptions(prev => [...prev, transcription]);
-    setLastProcessedCount(processedCount);
-    setTotalProcessedCount(totalProcessedCount);
-    setReceivedChunkCount(receivedChunkCount);
-    setSpeakerBufferDuration(queuedChunkCount);
-    setChunkerProcessedCount(chunkerProcessedCount);
-    console.log('State updated:', { lastProcessedCount: processedCount, totalProcessedCount, receivedChunkCount, speakerBufferDuration: queuedChunkCount });
+    console.log('State updated with new segments');
+  };
+
+  const handleTranscriptionsRefresh = async () => {
+    if (!id || !token) {
+      console.log('handleTranscriptionsRefresh called but missing id or token:', { id, token: !!token });
+      return;
+    }
+    
+    console.log('Refreshing stored transcriptions after speaker refinement...');
+    setLoadingStoredTranscriptions(true);
+    try {
+      const refreshResponse = await fetchWithAuth(`http://localhost:8000/meetings/${id}/transcriptions`);
+      
+      if (refreshResponse.ok) {
+        const data = await refreshResponse.json();
+        console.log('Previous stored transcriptions count:', storedTranscriptions.length);
+        console.log('New stored transcriptions data:', data);
+        setStoredTranscriptions(data);
+        setRefreshKey(prev => prev + 1); // Force re-render
+        console.log('Refreshed stored transcriptions count:', data.length);
+        console.log('Forced re-render with refreshKey:', refreshKey + 1);
+      } else {
+        console.error('Failed to refresh stored transcriptions:', refreshResponse.status);
+      }
+    } catch (error) {
+      console.error('Error refreshing stored transcriptions:', error);
+    } finally {
+      setLoadingStoredTranscriptions(false);
+    }
   };
 
   const formatTime = (seconds: number) => {
@@ -165,24 +269,43 @@ const MeetingRoom: React.FC = () => {
     <Box sx={{ minHeight: '100vh', backgroundColor: 'background.default', py: 4 }}>
       <Container maxWidth="xl">
         {/* Header */}
-        <Box sx={{ mb: 4 }}>
-          <Typography 
-            variant="h4" 
-            component="h1" 
-            gutterBottom
-            sx={{ 
-              fontWeight: 700,
-              background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
-              backgroundClip: 'text',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-            }}
-          >
-            Meeting Room #{id}
-          </Typography>
-          <Typography variant="h6" color="text.secondary">
-            AI-powered transcription and analysis
-          </Typography>
+        <Box sx={{ mb: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Box>
+            <Typography 
+              variant="h4" 
+              component="h1" 
+              gutterBottom
+              sx={{ 
+                fontWeight: 700,
+                background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+                backgroundClip: 'text',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+              }}
+            >
+              Meeting Room #{id}
+            </Typography>
+            <Typography variant="h6" color="text.secondary">
+              AI-powered transcription and analysis
+            </Typography>
+          </Box>
+          
+          {/* Audio Settings Button */}
+          <Tooltip title="Audio Settings" placement="left">
+            <IconButton
+              onClick={handleAudioSettingsClick}
+              sx={{
+                backgroundColor: 'primary.main',
+                color: 'white',
+                '&:hover': {
+                  backgroundColor: 'primary.dark',
+                },
+                boxShadow: 2,
+              }}
+            >
+              <Settings />
+            </IconButton>
+          </Tooltip>
         </Box>
 
         {/* Stats Cards */}
@@ -191,7 +314,7 @@ const MeetingRoom: React.FC = () => {
             <Card sx={{ background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)', color: 'white' }}>
               <CardContent sx={{ p: 2.5 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <Person sx={{ fontSize: 28 }} />
+                  <People sx={{ fontSize: 28 }} />
                   <Box>
                     <Typography variant="h5" fontWeight={700}>
                       {uniqueSpeakers.length}
@@ -221,51 +344,59 @@ const MeetingRoom: React.FC = () => {
               </CardContent>
             </Card>
           </Grid>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)', color: 'white' }}>
-              <CardContent sx={{ p: 2.5 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <TrendingUp sx={{ fontSize: 28 }} />
-                  <Box>
-                    <Typography variant="h5" fontWeight={700}>
-                      {totalProcessedCount || 0}
-                    </Typography>
-                    <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                      Processed
-                    </Typography>
-                  </Box>
-                </Box>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)', color: 'white' }}>
-              <CardContent sx={{ p: 2.5 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <AccessTime sx={{ fontSize: 28 }} />
-                  <Box>
-                    <Typography variant="h5" fontWeight={700}>
-                      {receivedChunkCount || 0}
-                    </Typography>
-                    <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                      Chunks
-                    </Typography>
-                  </Box>
-                </Box>
-              </CardContent>
-            </Card>
-          </Grid>
         </Grid>
 
-        {/* Audio Settings */}
-        <Paper sx={{ p: 3, mb: 4, borderRadius: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-            <Settings color="primary" />
-            <Typography variant="h6" fontWeight={600}>
-              Audio Settings
-            </Typography>
+        {/* Audio Settings Popover */}
+        <Popover
+          open={audioSettingsOpen}
+          anchorEl={audioSettingsAnchor}
+          onClose={handleAudioSettingsClose}
+          anchorOrigin={{
+            vertical: 'bottom',
+            horizontal: 'right',
+          }}
+          transformOrigin={{
+            vertical: 'top',
+            horizontal: 'right',
+          }}
+          PaperProps={{
+            sx: {
+              p: 3,
+              minWidth: 350,
+              borderRadius: 3,
+              boxShadow: '0 10px 40px rgba(0,0,0,0.1)',
+            }
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Settings color="primary" />
+              <Typography variant="h6" fontWeight={600}>
+                Audio Settings
+              </Typography>
+            </Box>
+            <IconButton
+              onClick={handleAudioSettingsClose}
+              size="small"
+              sx={{ color: 'text.secondary' }}
+            >
+              <Close fontSize="small" />
+            </IconButton>
           </Box>
-          <FormControl fullWidth sx={{ maxWidth: 400 }}>
+          
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              Select your preferred microphone for recording
+            </Typography>
+            <Chip 
+              label={`${audioDevices.length} device${audioDevices.length !== 1 ? 's' : ''} available`}
+              size="small"
+              color="primary"
+              variant="outlined"
+            />
+          </Box>
+          
+          <FormControl fullWidth>
             <InputLabel id="audio-device-select-label">Audio Input Device</InputLabel>
             <Select
               labelId="audio-device-select-label"
@@ -277,14 +408,19 @@ const MeetingRoom: React.FC = () => {
               {audioDevices.map((device) => (
                 <MenuItem key={device.deviceId} value={device.deviceId}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Mic fontSize="small" />
-                    {device.label}
+                    <Mic fontSize="small" color={selectedDevice === device.deviceId ? 'primary' : 'inherit'} />
+                    <Typography variant="body2" sx={{ flexGrow: 1 }}>
+                      {device.label}
+                    </Typography>
+                    {selectedDevice === device.deviceId && (
+                      <Chip label="Active" size="small" color="success" variant="filled" />
+                    )}
                   </Box>
                 </MenuItem>
               ))}
             </Select>
           </FormControl>
-        </Paper>
+        </Popover>
 
         {/* Audio Recorder */}
         <Paper sx={{ p: 3, mb: 4, borderRadius: 3 }}>
@@ -292,54 +428,27 @@ const MeetingRoom: React.FC = () => {
             <AudioRecorder
               meetingId={parseInt(id)}
               onTranscriptionUpdate={handleTranscriptionUpdate}
+              onTranscriptionsRefresh={handleTranscriptionsRefresh}
+              onSummaryChange={(summary, storedSummaries, loading) => {
+                setSummary(summary || '');
+                setLoadingStoredSummaries(loading);
+              }}
+              onMeetingNotesChange={(meetingNotes, loading) => {
+                setMeetingNotes(meetingNotes || '');
+                setLoadingMeetingNotes(loading);
+              }}
+              onActionItemsChange={(actionItems, loading) => {
+                setActionItems(actionItems || '');
+                setLoadingActionItems(loading);
+              }}
             />
           )}
         </Paper>
 
-        {/* Processing Stats */}
-        {(lastProcessedCount !== undefined || totalProcessedCount !== undefined || receivedChunkCount !== undefined) && (
-          <Paper sx={{ p: 3, mb: 4, borderRadius: 3 }}>
-            <Typography variant="h6" fontWeight={600} gutterBottom>
-              Processing Statistics
-            </Typography>
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={4}>
-                <Box>
-                  <Typography variant="body2" color="text.secondary">
-                    Last Chunk Segments
-                  </Typography>
-                  <Typography variant="h6" fontWeight={600}>
-                    {lastProcessedCount !== undefined ? lastProcessedCount : 'N/A'}
-                  </Typography>
-                </Box>
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <Box>
-                  <Typography variant="body2" color="text.secondary">
-                    Total Segments
-                  </Typography>
-                  <Typography variant="h6" fontWeight={600}>
-                    {totalProcessedCount !== undefined ? totalProcessedCount : 'N/A'}
-                  </Typography>
-                </Box>
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <Box>
-                  <Typography variant="body2" color="text.secondary">
-                    Buffer Duration
-                  </Typography>
-                  <Typography variant="h6" fontWeight={600}>
-                    {speakerBufferDuration !== undefined ? speakerBufferDuration.toFixed(2) + 's' : 'N/A'}
-                  </Typography>
-                </Box>
-              </Grid>
-            </Grid>
-          </Paper>
-        )}
-
         {/* Main Content */}
         <Grid container spacing={4}>
-          <Grid item xs={12} lg={8}>
+          {/* Live Transcription Section */}
+          <Grid item xs={12} lg={7}>
             <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
               <Box sx={{ p: 3, background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(139, 92, 246, 0.05) 100%)' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -358,7 +467,7 @@ const MeetingRoom: React.FC = () => {
                 </Box>
               </Box>
               <Divider />
-              <Box sx={{ p: 3, height: '500px', overflowY: 'auto' }}>
+              <Box sx={{ p: 3, height: { xs: '400px', lg: '600px' }, overflowY: 'auto' }} key={`transcriptions-${refreshKey}`}>
                 {loadingStoredTranscriptions && (
                   <Alert severity="info" sx={{ mb: 2 }}>
                     Loading previous transcriptions...
@@ -391,8 +500,16 @@ const MeetingRoom: React.FC = () => {
                               <Chip
                                 label={segment.speaker}
                                 size="small"
-                                color="primary"
                                 variant="outlined"
+                                sx={{
+                                  color: getSpeakerColor(segment.speaker).color,
+                                  backgroundColor: getSpeakerColor(segment.speaker).backgroundColor,
+                                  borderColor: getSpeakerColor(segment.speaker).borderColor,
+                                  fontWeight: 600,
+                                  '&:hover': {
+                                    backgroundColor: getSpeakerColor(segment.speaker).backgroundColor,
+                                  }
+                                }}
                               />
                               <Chip
                                 label="Previous"
@@ -436,8 +553,16 @@ const MeetingRoom: React.FC = () => {
                               <Chip
                                 label={segment.speaker}
                                 size="small"
-                                color="primary"
                                 variant="outlined"
+                                sx={{
+                                  color: getSpeakerColor(segment.speaker).color,
+                                  backgroundColor: getSpeakerColor(segment.speaker).backgroundColor,
+                                  borderColor: getSpeakerColor(segment.speaker).borderColor,
+                                  fontWeight: 600,
+                                  '&:hover': {
+                                    backgroundColor: getSpeakerColor(segment.speaker).backgroundColor,
+                                  }
+                                }}
                               />
                               <Chip
                                 label="Live"
@@ -475,28 +600,295 @@ const MeetingRoom: React.FC = () => {
             </Paper>
           </Grid>
 
-          <Grid item xs={12} lg={4}>
-            <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
-              <Box sx={{ p: 3, background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(5, 150, 105, 0.05) 100%)' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <Assignment color="success" />
-                  <Typography variant="h6" fontWeight={600}>
-                    Action Items
-                  </Typography>
-                </Box>
+          {/* Meeting Analysis Section with Tabs */}
+          <Grid item xs={12} lg={5}>
+            <Paper sx={{ borderRadius: 3, overflow: 'hidden', height: { xs: '600px', lg: '700px' }, display: 'flex', flexDirection: 'column' }}>
+              <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+                <Tabs 
+                  value={activeTab} 
+                  onChange={handleTabChange} 
+                  aria-label="meeting analysis tabs"
+                  variant="fullWidth"
+                  sx={{
+                    '& .MuiTab-root': {
+                      minHeight: { xs: 56, lg: 64 },
+                      fontSize: { xs: '0.85rem', lg: '0.95rem' },
+                      fontWeight: 600,
+                    }
+                  }}
+                >
+                  <Tab 
+                    icon={<Assignment />} 
+                    label="Summary" 
+                    {...a11yProps(0)}
+                    sx={{ 
+                      '&.Mui-selected': { 
+                        color: 'success.main',
+                        '& .MuiSvgIcon-root': { color: 'success.main' }
+                      }
+                    }}
+                  />
+                  <Tab 
+                    icon={<Notes />} 
+                    label="Notes" 
+                    {...a11yProps(1)}
+                    sx={{ 
+                      '&.Mui-selected': { 
+                        color: 'primary.main',
+                        '& .MuiSvgIcon-root': { color: 'primary.main' }
+                      }
+                    }}
+                  />
+                  <Tab 
+                    icon={<ChecklistRtl />} 
+                    label="Action Items" 
+                    {...a11yProps(2)}
+                    sx={{ 
+                      '&.Mui-selected': { 
+                        color: 'warning.main',
+                        '& .MuiSvgIcon-root': { color: 'warning.main' }
+                      }
+                    }}
+                  />
+                </Tabs>
               </Box>
-              <Divider />
-              <Box sx={{ p: 3, height: '500px', overflowY: 'auto' }}>
-                <Box sx={{ textAlign: 'center', py: 8 }}>
-                  <Assignment sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
-                  <Typography variant="h6" color="text.secondary" gutterBottom>
-                    No action items yet
-                  </Typography>
-                  <Typography variant="body1" color="text.secondary">
-                    Action items will be automatically extracted from the conversation
-                  </Typography>
+
+              {/* Summary Tab */}
+              <TabPanel value={activeTab} index={0}>
+                <Box sx={{ height: { xs: '480px', lg: '580px' }, overflowY: 'auto', pr: 1 }}>
+                  {summary ? (
+                    <Box sx={{
+                      '& h1, & h2, & h3, & h4, & h5, & h6': {
+                        fontFamily: 'inherit',
+                        fontWeight: 600,
+                        marginTop: 2,
+                        marginBottom: 1,
+                        color: 'text.primary'
+                      },
+                      '& h1': { fontSize: '1.75rem' },
+                      '& h2': { fontSize: '1.5rem' },
+                      '& h3': { fontSize: '1.25rem' },
+                      '& p': {
+                        marginTop: 1,
+                        marginBottom: 1,
+                        lineHeight: 1.8,
+                        color: 'text.primary',
+                        fontSize: '1rem'
+                      },
+                      '& ul, & ol': {
+                        marginTop: 1,
+                        marginBottom: 1,
+                        paddingLeft: 3
+                      },
+                      '& li': {
+                        marginBottom: 0.5,
+                        lineHeight: 1.7,
+                        color: 'text.primary',
+                        fontSize: '1rem'
+                      },
+                      '& strong': {
+                        fontWeight: 600,
+                        color: 'text.primary'
+                      },
+                      '& em': {
+                        fontStyle: 'italic'
+                      },
+                      '& code': {
+                        backgroundColor: 'grey.100',
+                        padding: '4px 8px',
+                        borderRadius: 1,
+                        fontSize: '0.9rem',
+                        fontFamily: 'monospace'
+                      },
+                      '& blockquote': {
+                        borderLeft: '4px solid',
+                        borderColor: 'primary.main',
+                        paddingLeft: 2,
+                        marginLeft: 0,
+                        marginTop: 2,
+                        marginBottom: 2,
+                        fontStyle: 'italic',
+                        backgroundColor: 'grey.50',
+                        padding: 2,
+                        borderRadius: 1
+                      }
+                    }}>
+                      <ReactMarkdown>{summary}</ReactMarkdown>
+                    </Box>
+                  ) : (
+                    <Box sx={{ textAlign: 'center', py: 8 }}>
+                      <Assignment sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
+                      <Typography variant="h6" color="text.secondary" gutterBottom>
+                        {loadingStoredSummaries ? 'Generating summary...' : 'No summary yet'}
+                      </Typography>
+                      <Typography variant="body1" color="text.secondary">
+                        {loadingStoredSummaries 
+                          ? 'Please wait while we generate a summary of the meeting'
+                          : 'A summary will be generated after the meeting ends'
+                        }
+                      </Typography>
+                    </Box>
+                  )}
                 </Box>
-              </Box>
+              </TabPanel>
+
+              {/* Meeting Notes Tab */}
+              <TabPanel value={activeTab} index={1}>
+                <Box sx={{ height: { xs: '480px', lg: '580px' }, overflowY: 'auto', pr: 1 }}>
+                  {meetingNotes ? (
+                    <Box sx={{
+                      '& h1, & h2, & h3, & h4, & h5, & h6': {
+                        fontFamily: 'inherit',
+                        fontWeight: 600,
+                        marginTop: 2,
+                        marginBottom: 1,
+                        color: 'text.primary'
+                      },
+                      '& h1': { fontSize: '1.75rem' },
+                      '& h2': { fontSize: '1.5rem' },
+                      '& h3': { fontSize: '1.25rem' },
+                      '& p': {
+                        marginTop: 1,
+                        marginBottom: 1,
+                        lineHeight: 1.8,
+                        color: 'text.primary',
+                        fontSize: '1rem'
+                      },
+                      '& ul, & ol': {
+                        marginTop: 1,
+                        marginBottom: 1,
+                        paddingLeft: 3
+                      },
+                      '& li': {
+                        marginBottom: 0.5,
+                        lineHeight: 1.7,
+                        color: 'text.primary',
+                        fontSize: '1rem'
+                      },
+                      '& strong': {
+                        fontWeight: 600,
+                        color: 'text.primary'
+                      },
+                      '& em': {
+                        fontStyle: 'italic'
+                      },
+                      '& code': {
+                        backgroundColor: 'grey.100',
+                        padding: '4px 8px',
+                        borderRadius: 1,
+                        fontSize: '0.9rem',
+                        fontFamily: 'monospace'
+                      },
+                      '& blockquote': {
+                        borderLeft: '4px solid',
+                        borderColor: 'primary.main',
+                        paddingLeft: 2,
+                        marginLeft: 0,
+                        marginTop: 2,
+                        marginBottom: 2,
+                        fontStyle: 'italic',
+                        backgroundColor: 'grey.50',
+                        padding: 2,
+                        borderRadius: 1
+                      }
+                    }}>
+                      <ReactMarkdown>{meetingNotes}</ReactMarkdown>
+                    </Box>
+                  ) : (
+                    <Box sx={{ textAlign: 'center', py: 8 }}>
+                      <Notes sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
+                      <Typography variant="h6" color="text.secondary" gutterBottom>
+                        {loadingMeetingNotes ? 'Generating notes...' : 'No notes yet'}
+                      </Typography>
+                      <Typography variant="body1" color="text.secondary">
+                        {loadingMeetingNotes 
+                          ? 'Please wait while we generate detailed meeting notes'
+                          : 'Detailed notes will be generated after the meeting ends'
+                        }
+                      </Typography>
+                    </Box>
+                  )}
+                </Box>
+              </TabPanel>
+
+              {/* Action Items Tab */}
+              <TabPanel value={activeTab} index={2}>
+                <Box sx={{ height: { xs: '480px', lg: '580px' }, overflowY: 'auto', pr: 1 }}>
+                  {actionItems ? (
+                    <Box sx={{
+                      '& h1, & h2, & h3, & h4, & h5, & h6': {
+                        fontFamily: 'inherit',
+                        fontWeight: 600,
+                        marginTop: 2,
+                        marginBottom: 1,
+                        color: 'text.primary'
+                      },
+                      '& h1': { fontSize: '1.75rem' },
+                      '& h2': { fontSize: '1.5rem' },
+                      '& h3': { fontSize: '1.25rem' },
+                      '& p': {
+                        marginTop: 1,
+                        marginBottom: 1,
+                        lineHeight: 1.8,
+                        color: 'text.primary',
+                        fontSize: '1rem'
+                      },
+                      '& ul, & ol': {
+                        marginTop: 1,
+                        marginBottom: 1,
+                        paddingLeft: 3
+                      },
+                      '& li': {
+                        marginBottom: 0.5,
+                        lineHeight: 1.7,
+                        color: 'text.primary',
+                        fontSize: '1rem'
+                      },
+                      '& strong': {
+                        fontWeight: 600,
+                        color: 'text.primary'
+                      },
+                      '& em': {
+                        fontStyle: 'italic'
+                      },
+                      '& code': {
+                        backgroundColor: 'grey.100',
+                        padding: '4px 8px',
+                        borderRadius: 1,
+                        fontSize: '0.9rem',
+                        fontFamily: 'monospace'
+                      },
+                      '& blockquote': {
+                        borderLeft: '4px solid',
+                        borderColor: 'warning.main',
+                        paddingLeft: 2,
+                        marginLeft: 0,
+                        marginTop: 2,
+                        marginBottom: 2,
+                        fontStyle: 'italic',
+                        backgroundColor: 'grey.50',
+                        padding: 2,
+                        borderRadius: 1
+                      }
+                    }}>
+                      <ReactMarkdown>{actionItems}</ReactMarkdown>
+                    </Box>
+                  ) : (
+                    <Box sx={{ textAlign: 'center', py: 8 }}>
+                      <ChecklistRtl sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
+                      <Typography variant="h6" color="text.secondary" gutterBottom>
+                        {loadingActionItems ? 'Identifying action items...' : 'No action items yet'}
+                      </Typography>
+                      <Typography variant="body1" color="text.secondary">
+                        {loadingActionItems 
+                          ? 'Please wait while we identify action items from the meeting'
+                          : 'Action items will be identified after the meeting ends'
+                        }
+                      </Typography>
+                    </Box>
+                  )}
+                </Box>
+              </TabPanel>
             </Paper>
           </Grid>
         </Grid>

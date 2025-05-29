@@ -34,7 +34,7 @@ import {
   deleteMeetingSuccess,
 } from '../store/slices/meetingSlice';
 import MeetingDropdownMenu from '../components/MeetingDropdownMenu';
-import axios from 'axios';
+import api from '../utils/api';
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -56,9 +56,7 @@ const Dashboard: React.FC = () => {
     const fetchMeetings = async () => {
       dispatch(fetchMeetingsStart());
       try {
-        const response = await axios.get('http://localhost:8000/meetings/', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const response = await api.get('/meetings/');
         dispatch(fetchMeetingsSuccess(response.data));
       } catch (err) {
         dispatch(fetchMeetingsFailure('Failed to fetch meetings'));
@@ -72,11 +70,7 @@ const Dashboard: React.FC = () => {
     if (!newMeetingTitle.trim()) return;
     
     try {
-      const response = await axios.post(
-        'http://localhost:8000/meetings/',
-        { title: newMeetingTitle },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const response = await api.post('/meetings/', { title: newMeetingTitle });
       navigate(`/meeting/${response.data.id}`);
     } catch (err) {
       console.error('Failed to create meeting:', err);
@@ -85,11 +79,7 @@ const Dashboard: React.FC = () => {
 
   const handleRenameMeeting = async (meetingId: number, newTitle: string) => {
     try {
-      const response = await axios.put(
-        `http://localhost:8000/meetings/${meetingId}`,
-        { title: newTitle },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const response = await api.put(`/meetings/${meetingId}`, { title: newTitle });
       dispatch(updateMeetingSuccess(response.data));
       setSnackbar({
         open: true,
@@ -108,10 +98,7 @@ const Dashboard: React.FC = () => {
 
   const handleDeleteMeeting = async (meetingId: number) => {
     try {
-      await axios.delete(
-        `http://localhost:8000/meetings/${meetingId}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      await api.delete(`/meetings/${meetingId}`);
       dispatch(deleteMeetingSuccess(meetingId));
       setSnackbar({
         open: true,
