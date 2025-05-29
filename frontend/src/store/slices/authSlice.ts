@@ -7,12 +7,37 @@ interface AuthState {
   error: string | null;
 }
 
+// Utility function to check if token is expired
+const isTokenExpired = (token: string | null): boolean => {
+  if (!token) return true;
+  
+  try {
+    // Decode JWT token (without verification, just to check expiration)
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    const currentTime = Date.now() / 1000;
+    
+    return payload.exp < currentTime;
+  } catch (error) {
+    console.error('Error decoding token:', error);
+    return true;
+  }
+};
+
+// Check initial token validity
+const storedToken = localStorage.getItem('token');
+const isValidToken = !!(storedToken && !isTokenExpired(storedToken));
+
 const initialState: AuthState = {
-  token: localStorage.getItem('token'),
-  isAuthenticated: !!localStorage.getItem('token'),
+  token: isValidToken ? storedToken : null,
+  isAuthenticated: isValidToken,
   loading: false,
   error: null,
 };
+
+// Clear invalid token from localStorage if it exists
+if (storedToken && !isValidToken) {
+  localStorage.removeItem('token');
+}
 
 const authSlice = createSlice({
   name: 'auth',
@@ -37,8 +62,15 @@ const authSlice = createSlice({
       state.isAuthenticated = false;
       localStorage.removeItem('token');
     },
+    validateToken: (state) => {
+      if (state.token && isTokenExpired(state.token)) {
+        state.token = null;
+        state.isAuthenticated = false;
+        localStorage.removeItem('token');
+      }
+    },
   },
 });
 
-export const { loginStart, loginSuccess, loginFailure, logout } = authSlice.actions;
+export const { loginStart, loginSuccess, loginFailure, logout, validateToken } = authSlice.actions;
 export default authSlice.reducer; 

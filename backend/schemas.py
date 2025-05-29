@@ -72,6 +72,7 @@ class Meeting(MeetingBase):
     end_time: Optional[datetime]
     owner_id: int
     status: str
+    is_ended: bool = False
 
     class Config:
         from_attributes = True
@@ -147,4 +148,19 @@ class SpeakerSegment(BaseModel):
 
 class SpeakerIdentificationResponse(BaseModel):
     segments: List[SpeakerSegment]
-    total_speakers: int 
+    total_speakers: int
+
+# Meeting Notes schemas
+class MeetingNotesBase(BaseModel):
+    content: str
+
+class MeetingNotesCreate(MeetingNotesBase):
+    meeting_id: int
+
+class MeetingNotes(MeetingNotesBase):
+    id: int
+    meeting_id: int
+    generated_at: datetime
+
+    class Config:
+        from_attributes = True 

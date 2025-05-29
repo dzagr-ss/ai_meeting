@@ -34,11 +34,13 @@ class Meeting(Base):
     end_time = Column(DateTime, nullable=True)
     owner_id = Column(Integer, ForeignKey("users.id"))
     status = Column(String, default="scheduled")  # scheduled, in_progress, completed
+    is_ended = Column(Boolean, default=False)  # Track if meeting has been manually ended
     
     owner = relationship("User", back_populates="meetings")
     transcriptions = relationship("Transcription", back_populates="meeting")
     action_items = relationship("ActionItem", back_populates="meeting")
     summaries = relationship("Summary", back_populates="meeting")
+    meeting_notes = relationship("MeetingNotes", back_populates="meeting")
 
 class Transcription(Base):
     __tablename__ = "transcriptions"
@@ -60,6 +62,16 @@ class Summary(Base):
     generated_at = Column(DateTime, default=datetime.utcnow)
     
     meeting = relationship("Meeting", back_populates="summaries")
+
+class MeetingNotes(Base):
+    __tablename__ = "meeting_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    meeting_id = Column(Integer, ForeignKey("meetings.id"))
+    content = Column(Text)
+    generated_at = Column(DateTime, default=datetime.utcnow)
+    
+    meeting = relationship("Meeting", back_populates="meeting_notes")
 
 class ActionItem(Base):
     __tablename__ = "action_items"
