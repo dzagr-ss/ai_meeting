@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { useSelector } from 'react-redux';
-import { Box, CssBaseline } from '@mui/material';
+import { useSelector, useDispatch } from 'react-redux';
+import { Box, CssBaseline, Snackbar, Alert } from '@mui/material';
 import { ThemeProvider } from '@mui/material/styles';
 import { RootState } from './store';
+import { validateToken } from './store/slices/authSlice';
 import theme from './theme';
 
 // Components
@@ -17,6 +18,39 @@ import ResetPassword from './pages/ResetPassword';
 
 const App: React.FC = () => {
   const { isAuthenticated } = useSelector((state: RootState) => state.auth);
+  const dispatch = useDispatch();
+  const [tokenExpiredMessage, setTokenExpiredMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Listen for token expiration events
+    const handleTokenExpired = (event: CustomEvent) => {
+      setTokenExpiredMessage(event.detail.message);
+    };
+
+    window.addEventListener('tokenExpired', handleTokenExpired as EventListener);
+
+    return () => {
+      window.removeEventListener('tokenExpired', handleTokenExpired as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    // Validate token on app start and periodically
+    dispatch(validateToken());
+
+    // Check token validity every 5 minutes
+    const tokenValidationInterval = setInterval(() => {
+      dispatch(validateToken());
+    }, 5 * 60 * 1000); // 5 minutes
+
+    return () => {
+      clearInterval(tokenValidationInterval);
+    };
+  }, [dispatch]);
+
+  const handleCloseTokenExpiredMessage = () => {
+    setTokenExpiredMessage(null);
+  };
 
   return (
     <ThemeProvider theme={theme}>
@@ -69,6 +103,22 @@ const App: React.FC = () => {
             />
           </Routes>
         </Box>
+
+        {/* Token Expiration Snackbar */}
+        <Snackbar
+          open={!!tokenExpiredMessage}
+          autoHideDuration={6000}
+          onClose={handleCloseTokenExpiredMessage}
+          anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        >
+          <Alert 
+            onClose={handleCloseTokenExpiredMessage} 
+            severity="warning" 
+            sx={{ width: '100%' }}
+          >
+            {tokenExpiredMessage}
+          </Alert>
+        </Snackbar>
       </Box>
     </ThemeProvider>
   );

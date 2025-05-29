@@ -11,6 +11,7 @@ import schemas
 import config
 import tempfile
 import secrets
+import os
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -143,10 +144,11 @@ def delete_meeting(db: Session, meeting_id: int, user_id: int):
     if not db_meeting:
         return False
     
-    # Delete related records first (transcriptions, action items, summaries)
+    # Delete related records first (transcriptions, action items, summaries, meeting notes)
     db.query(models.Transcription).filter(models.Transcription.meeting_id == meeting_id).delete()
     db.query(models.ActionItem).filter(models.ActionItem.meeting_id == meeting_id).delete()
     db.query(models.Summary).filter(models.Summary.meeting_id == meeting_id).delete()
+    db.query(models.MeetingNotes).filter(models.MeetingNotes.meeting_id == meeting_id).delete()
     
     # Delete the meeting
     db.delete(db_meeting)
@@ -175,15 +177,17 @@ def get_latest_meeting_summary(db: Session, meeting_id: int):
 async def process_audio(db: Session, meeting_id: int, audio_data: schemas.AudioData):
     # Initialize OpenAI client
     client = OpenAI(api_key=config.settings.OPENAI_API_KEY)
+    temp_file_path = None
     
     try:
         # Create a temporary file to store the audio
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
             temp_file.write(audio_data.audio_content)
             temp_file.flush()
+            temp_file_path = temp_file.name
             
             # Process audio with Whisper API
-            with open(temp_file.name, 'rb') as audio_file:
+            with open(temp_file_path, 'rb') as audio_file:
                 response = client.audio.transcriptions.create(
                     model="whisper-1",
                     file=audio_file,
@@ -216,16 +220,86 @@ async def process_audio(db: Session, meeting_id: int, audio_data: schemas.AudioD
     except Exception as e:
         db.rollback()
         raise e
+    finally:
+        # Clean up temporary file
+        if temp_file_path:
+            try:
+                os.unlink(temp_file_path)
+            except Exception as cleanup_error:
+                print(f"Warning: Could not clean up temporary file {temp_file_path}: {cleanup_error}")
 
 async def generate_action_items(text: str) -> list:
     try:
-        response = await openai.ChatCompletion.create(
+        # Initialize OpenAI client
+        client = OpenAI(api_key=config.settings.OPENAI_API_KEY)
+        
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Extract action items from the following meeting transcript. Return them as a list."},
+                {"role": "system", "content": "Extract action items from the following meeting transcript. Return them as a list, one item per line."},
                 {"role": "user", "content": text}
             ]
         )
-        return response.choices[0].message.content.split("\n")
+        
+        # Parse the response and split into individual action items
+        action_items_text = response.choices[0].message.content
+        action_items = [item.strip() for item in action_items_text.split("\n") if item.strip()]
+        return action_items
     except Exception as e:
-        return [] 
+        print(f"Error generating action items: {e}")
+        return []
+
+# Meeting Notes operations
+def create_meeting_notes(db: Session, meeting_notes: schemas.MeetingNotesCreate):
+    db_meeting_notes = models.MeetingNotes(**meeting_notes.dict())
+    db.add(db_meeting_notes)
+    db.commit()
+    db.refresh(db_meeting_notes)
+    return db_meeting_notes
+
+def get_meeting_notes(db: Session, meeting_id: int):
+    return db.query(models.MeetingNotes).filter(
+        models.MeetingNotes.meeting_id == meeting_id
+    ).order_by(models.MeetingNotes.generated_at.desc()).all()
+
+def get_latest_meeting_notes(db: Session, meeting_id: int):
+    return db.query(models.MeetingNotes).filter(
+        models.MeetingNotes.meeting_id == meeting_id
+    ).order_by(models.MeetingNotes.generated_at.desc()).first()
+
+# Meeting status operations
+def mark_meeting_as_ended(db: Session, meeting_id: int, user_id: int):
+    """Mark a meeting as ended and set the end time"""
+    db_meeting = db.query(models.Meeting).filter(
+        models.Meeting.id == meeting_id,
+        models.Meeting.owner_id == user_id
+    ).first()
+    
+    if not db_meeting:
+        return None
+    
+    # Update meeting status
+    db_meeting.is_ended = True
+    db_meeting.end_time = datetime.utcnow()
+    db_meeting.status = "completed"
+    
+    db.commit()
+    db.refresh(db_meeting)
+    return db_meeting
+
+def get_meeting_status(db: Session, meeting_id: int, user_id: int):
+    """Get the current status of a meeting"""
+    db_meeting = db.query(models.Meeting).filter(
+        models.Meeting.id == meeting_id,
+        models.Meeting.owner_id == user_id
+    ).first()
+    
+    if not db_meeting:
+        return None
+    
+    return {
+        "id": db_meeting.id,
+        "is_ended": db_meeting.is_ended,
+        "status": db_meeting.status,
+        "end_time": db_meeting.end_time
+    } 

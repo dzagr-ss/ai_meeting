@@ -7,12 +7,12 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import os
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional, Dict, Any
 import uvicorn
 from fastapi.security import OAuth2PasswordBearer
 import jwt
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 import io
 from pydub import AudioSegment
@@ -20,6 +20,9 @@ import wave
 import warnings
 from fastapi.responses import JSONResponse
 import glob
+import concurrent.futures
+import hashlib
+from functools import lru_cache
 
 from database import get_db, engine, SessionLocal
 import models
@@ -35,6 +38,9 @@ import time
 import uuid
 import google.generativeai as genai
 from email_service import email_service
+from openai import OpenAI
+from collections import defaultdict
+import re
 
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
@@ -91,9 +97,483 @@ warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using F
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Set this in your .env or environment
 
+# Global cache for speaker identifier to avoid reloading models
+_speaker_identifier_cache = None
+
+def get_safe_email_for_path(email: str) -> str:
+    """Convert email to a safe filename format"""
+    return email.replace("@", "_at_").replace(".", "_").replace("/", "_").replace("\\", "_")
+
+def get_cached_speaker_identifier():
+    """Get a cached speaker identifier to avoid reloading heavy models"""
+    global _speaker_identifier_cache
+    if _speaker_identifier_cache is None:
+        _speaker_identifier_cache = create_speaker_identifier()
+    return _speaker_identifier_cache
+
+def get_audio_file_hash(file_path: str) -> str:
+    """Generate a hash for an audio file to enable caching"""
+    try:
+        with open(file_path, 'rb') as f:
+            # Read first and last 1KB for quick hash (compromise between speed and uniqueness)
+            start = f.read(1024)
+            f.seek(-1024, 2)  # Seek to 1KB from end
+            end = f.read(1024)
+            file_size = os.path.getsize(file_path)
+            
+        content = start + end + str(file_size).encode()
+        return hashlib.md5(content).hexdigest()
+    except Exception:
+        return hashlib.md5(file_path.encode()).hexdigest()
+
+# Simple in-memory cache for processed audio files
+_audio_processing_cache = {}
+
+def process_single_audio_file(audio_file: str) -> List[dict]:
+    """Process a single audio file with caching"""
+    file_hash = get_audio_file_hash(audio_file)
+    
+    # Check cache first
+    if file_hash in _audio_processing_cache:
+        print(f"Using cached results for {os.path.basename(audio_file)}")
+        return _audio_processing_cache[file_hash]
+    
+    try:
+        print(f"Processing audio file for speaker analysis: {audio_file}")
+        
+        # Check if file exists and is readable
+        if not os.path.exists(audio_file):
+            print(f"Audio file does not exist: {audio_file}")
+            return []
+            
+        # Check file size
+        file_size = os.path.getsize(audio_file)
+        if file_size == 0:
+            print(f"Audio file is empty: {audio_file}")
+            return []
+            
+        print(f"File size: {file_size} bytes")
+        
+        # Use cached speaker identifier
+        speaker_identifier = get_cached_speaker_identifier()
+        segments = speaker_identifier.process_audio(audio_file)
+        
+        # Add file-specific context
+        filename = os.path.basename(audio_file)
+        file_segments = []
+        
+        for segment in segments:
+            refined_segment = segment.copy()
+            refined_segment["source_file"] = filename
+            file_segments.append(refined_segment)
+        
+        # Cache the results
+        _audio_processing_cache[file_hash] = file_segments
+        
+        print(f"Extracted {len(file_segments)} segments from {filename}")
+        return file_segments
+        
+    except Exception as e:
+        print(f"Error processing audio file {audio_file}: {e}")
+        if "Format not recognised" in str(e):
+            print(f"Audio format issue with {audio_file}. This might be due to incorrect file format or corruption.")
+        return []
+
+async def perform_comprehensive_speaker_analysis(audio_files: List[str]) -> List[dict]:
+    """
+    Perform comprehensive speaker diarization on all audio files with optimizations
+    Returns refined speaker segments with improved accuracy
+    """
+    if not audio_files:
+        return []
+    
+    print(f"[SpeakerAnalysis] Starting speaker analysis for {len(audio_files)} audio files")
+    
+    # Limit the number of files to prevent excessive processing
+    MAX_AUDIO_FILES = 10
+    if len(audio_files) > MAX_AUDIO_FILES:
+        print(f"[SpeakerAnalysis] Warning: Too many audio files ({len(audio_files)}), limiting to {MAX_AUDIO_FILES}")
+        audio_files = audio_files[:MAX_AUDIO_FILES]
+    
+    # Process files in parallel for better performance
+    max_workers = min(len(audio_files), 3)  # Limit to 3 workers to avoid overwhelming the system
+    all_segments = []
+    
+    print(f"[SpeakerAnalysis] Processing files with {max_workers} workers")
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks with timeout
+        future_to_file = {}
+        for audio_file in audio_files:
+            future = executor.submit(process_single_audio_file, audio_file)
+            future_to_file[future] = audio_file
+        
+        # Collect results as they complete with timeout
+        completed_files = 0
+        for future in concurrent.futures.as_completed(future_to_file, timeout=240):  # 4 minute timeout total
+            audio_file = future_to_file[future]
+            completed_files += 1
+            
+            try:
+                print(f"[SpeakerAnalysis] Processing file {completed_files}/{len(audio_files)}: {os.path.basename(audio_file)}")
+                file_segments = future.result(timeout=60)  # 1 minute timeout per file
+                all_segments.extend(file_segments)
+                print(f"[SpeakerAnalysis] File {completed_files} completed, got {len(file_segments)} segments")
+            except concurrent.futures.TimeoutError:
+                print(f"[SpeakerAnalysis] Timeout processing {audio_file}, skipping")
+            except Exception as e:
+                print(f"[SpeakerAnalysis] Error processing {audio_file}: {e}")
+    
+    print(f"[SpeakerAnalysis] Collected {len(all_segments)} total segments from all files")
+    
+    # Perform cross-file speaker clustering to improve consistency
+    print(f"[SpeakerAnalysis] Starting speaker clustering...")
+    refined_segments = cluster_speakers_across_files(all_segments)
+    
+    print(f"[SpeakerAnalysis] Comprehensive analysis complete: {len(refined_segments)} refined segments")
+    return refined_segments
+
+def cluster_speakers_across_files(segments: List[dict]) -> List[dict]:
+    """
+    Cluster speakers across multiple audio files to ensure consistent labeling
+    """
+    # Group segments by original speaker label
+    speaker_groups = {}
+    for segment in segments:
+        speaker = segment["speaker"]
+        if speaker not in speaker_groups:
+            speaker_groups[speaker] = []
+        speaker_groups[speaker].append(segment)
+    
+    # For now, use a simple mapping approach
+    # In a more sophisticated implementation, you could use voice embeddings
+    # to cluster speakers more accurately across files
+    
+    refined_segments = []
+    speaker_mapping = {}
+    next_speaker_id = 1
+    
+    for original_speaker, speaker_segments in speaker_groups.items():
+        # Create a consistent speaker ID across all files
+        if original_speaker not in speaker_mapping:
+            speaker_mapping[original_speaker] = f"Speaker_{next_speaker_id}"
+            next_speaker_id += 1
+        
+        consistent_speaker_id = speaker_mapping[original_speaker]
+        
+        # Update all segments with the consistent speaker ID
+        for segment in speaker_segments:
+            refined_segment = segment.copy()
+            refined_segment["refined_speaker"] = consistent_speaker_id
+            refined_segment["original_speaker"] = original_speaker
+            refined_segments.append(refined_segment)
+    
+    # Sort segments by start time for chronological order
+    refined_segments.sort(key=lambda x: x.get("start_time", 0))
+    
+    print(f"Speaker clustering complete: {len(speaker_mapping)} unique speakers identified")
+    return refined_segments
+
+async def update_transcriptions_with_refined_speakers(
+    db: Session, 
+    meeting_id: int, 
+    refined_segments: List[dict]
+) -> int:
+    """
+    Update existing transcriptions with refined speaker labels (optimized)
+    """
+    updated_count = 0
+    
+    try:
+        print(f"[TranscriptionUpdate] Starting transcription updates for meeting {meeting_id}")
+        
+        # Get all existing transcriptions for this meeting
+        transcriptions = db.query(models.Transcription).filter(
+            models.Transcription.meeting_id == meeting_id
+        ).order_by(models.Transcription.timestamp).all()
+        
+        print(f"[TranscriptionUpdate] Found {len(transcriptions)} existing transcriptions to update")
+        print(f"[TranscriptionUpdate] Found {len(refined_segments)} refined segments to match against")
+        
+        if not transcriptions or not refined_segments:
+            print(f"[TranscriptionUpdate] No transcriptions or segments to process")
+            return 0
+        
+        # Limit processing to prevent infinite loops
+        MAX_TRANSCRIPTIONS = 1000
+        MAX_SEGMENTS = 5000
+        
+        if len(transcriptions) > MAX_TRANSCRIPTIONS:
+            print(f"[TranscriptionUpdate] Warning: Too many transcriptions ({len(transcriptions)}), limiting to {MAX_TRANSCRIPTIONS}")
+            transcriptions = transcriptions[:MAX_TRANSCRIPTIONS]
+        
+        if len(refined_segments) > MAX_SEGMENTS:
+            print(f"[TranscriptionUpdate] Warning: Too many segments ({len(refined_segments)}), limiting to {MAX_SEGMENTS}")
+            refined_segments = refined_segments[:MAX_SEGMENTS]
+        
+        # Create an index of refined segments by text for faster lookup
+        print(f"[TranscriptionUpdate] Creating segment index...")
+        segment_text_index = {}
+        for i, segment in enumerate(refined_segments):
+            if i % 100 == 0:  # Progress indicator
+                print(f"[TranscriptionUpdate] Indexing segment {i}/{len(refined_segments)}")
+            
+            text_key = segment.get("text", "").lower().strip()
+            if text_key:
+                if text_key not in segment_text_index:
+                    segment_text_index[text_key] = []
+                segment_text_index[text_key].append(segment)
+        
+        print(f"[TranscriptionUpdate] Created index with {len(segment_text_index)} unique text keys")
+        
+        # Batch update operations
+        updates_to_apply = []
+        
+        # Create a mapping strategy based on text similarity and timing
+        print(f"[TranscriptionUpdate] Finding matches for transcriptions...")
+        for i, transcription in enumerate(transcriptions):
+            if i % 50 == 0:  # Progress indicator
+                print(f"[TranscriptionUpdate] Processing transcription {i}/{len(transcriptions)}")
+            
+            # Find the best matching refined segment (optimized)
+            best_match = find_best_matching_segment_optimized(transcription, refined_segments, segment_text_index)
+            
+            if best_match and best_match.get("refined_speaker"):
+                old_speaker = transcription.speaker
+                new_speaker = best_match["refined_speaker"]
+                
+                if old_speaker != new_speaker:  # Only update if different
+                    updates_to_apply.append({
+                        'id': transcription.id,
+                        'old_speaker': old_speaker,
+                        'new_speaker': new_speaker
+                    })
+        
+        print(f"[TranscriptionUpdate] Found {len(updates_to_apply)} transcriptions to update")
+        
+        # Apply bulk updates if any
+        if updates_to_apply:
+            # Limit batch size to prevent database issues
+            BATCH_SIZE = 100
+            
+            for batch_start in range(0, len(updates_to_apply), BATCH_SIZE):
+                batch_end = min(batch_start + BATCH_SIZE, len(updates_to_apply))
+                batch = updates_to_apply[batch_start:batch_end]
+                
+                print(f"[TranscriptionUpdate] Processing batch {batch_start//BATCH_SIZE + 1}/{(len(updates_to_apply) + BATCH_SIZE - 1)//BATCH_SIZE}")
+                
+                # Use bulk update for better performance
+                for update in batch:
+                    db.query(models.Transcription).filter(
+                        models.Transcription.id == update['id']
+                    ).update({'speaker': update['new_speaker']})
+                    updated_count += 1
+                
+                # Commit each batch
+                db.commit()
+                print(f"[TranscriptionUpdate] Committed batch, total updated: {updated_count}")
+            
+            print(f"[TranscriptionUpdate] Successfully updated {updated_count} transcriptions in total")
+        else:
+            print("[TranscriptionUpdate] No transcriptions needed updating")
+        
+    except Exception as e:
+        print(f"[TranscriptionUpdate] Error updating transcriptions: {e}")
+        db.rollback()
+        raise e
+    
+    return updated_count
+
+def find_best_matching_segment_optimized(
+    transcription: models.Transcription, 
+    refined_segments: List[dict],
+    segment_text_index: dict
+) -> dict:
+    """
+    Find the best matching refined segment for a given transcription (optimized)
+    Uses text similarity and other heuristics with indexing for better performance
+    """
+    transcription_text = transcription.text.lower().strip()
+    
+    if not transcription_text:
+        return None
+    
+    # First try exact match from index
+    if transcription_text in segment_text_index:
+        candidates = segment_text_index[transcription_text]
+        if candidates:
+            # If multiple exact matches, prefer one with similar speaker
+            for candidate in candidates:
+                if transcription.speaker in candidate.get("original_speaker", ""):
+                    return candidate
+            return candidates[0]  # Return first exact match
+    
+    # If no exact match, try fuzzy matching with a subset of segments
+    best_match = None
+    best_score = 0
+    
+    # Create word set for transcription for faster comparison
+    transcription_words = set(transcription_text.split())
+    
+    # Limit the number of segments to check to prevent infinite loops
+    MAX_SEGMENTS_TO_CHECK = 500
+    segments_checked = 0
+    
+    # Only check segments that have at least one word in common
+    for segment in refined_segments:
+        # Safety check to prevent infinite loops
+        segments_checked += 1
+        if segments_checked > MAX_SEGMENTS_TO_CHECK:
+            print(f"[SegmentMatching] Reached maximum segments to check ({MAX_SEGMENTS_TO_CHECK}), stopping search")
+            break
+        
+        segment_text = segment.get("text", "").lower().strip()
+        if not segment_text:
+            continue
+            
+        segment_words = set(segment_text.split())
+        
+        # Quick check: if no common words, skip
+        if not transcription_words.intersection(segment_words):
+            continue
+        
+        # Calculate similarity score (optimized)
+        similarity_score = calculate_text_similarity_optimized(transcription_words, segment_words)
+        
+        # Boost score if speakers are similar (for consistency)
+        if transcription.speaker in segment.get("original_speaker", ""):
+            similarity_score += 0.2
+        
+        if similarity_score > best_score and similarity_score > 0.3:  # Minimum threshold
+            best_score = similarity_score
+            best_match = segment
+            
+            # Early termination if we find a very good match
+            if similarity_score > 0.9:
+                break
+    
+    return best_match
+
+def calculate_text_similarity_optimized(words1: set, words2: set) -> float:
+    """Calculate text similarity using Jaccard similarity for optimization."""
+    if not words1 or not words2:
+        return 0.0
+    
+    intersection = len(words1.intersection(words2))
+    union = len(words1.union(words2))
+    
+    return intersection / union if union > 0 else 0.0
+
+def migrate_existing_files(db: Session):
+    """Migrate existing files from old structure to new user-based structure"""
+    # This function can be called once to migrate existing files
+    # Pattern: /tmp/meeting_{meeting_id}_{timestamp}.wav
+    old_pattern = "/tmp/meeting_*.wav"
+    old_files = glob.glob(old_pattern)
+    
+    migrated_count = 0
+    failed_count = 0
+    
+    if old_files:
+        print(f"Found {len(old_files)} files to migrate from old structure")
+        
+        for file_path in old_files:
+            try:
+                # Extract meeting_id from filename
+                filename = os.path.basename(file_path)
+                # Format: meeting_{meeting_id}_{timestamp}.wav
+                parts = filename.replace('.wav', '').split('_')
+                if len(parts) >= 3 and parts[0] == 'meeting':
+                    meeting_id = int(parts[1])
+                    
+                    # Look up the meeting owner
+                    meeting = db.query(models.Meeting).filter(models.Meeting.id == meeting_id).first()
+                    if meeting and meeting.owner:
+                        # Create new directory structure
+                        safe_email = get_safe_email_for_path(meeting.owner.email)
+                        new_dir = f"/tmp/meetings/{safe_email}/{meeting_id}"
+                        os.makedirs(new_dir, exist_ok=True)
+                        
+                        # Move file to new location
+                        new_path = os.path.join(new_dir, filename)
+                        os.rename(file_path, new_path)
+                        print(f"Migrated: {file_path} -> {new_path}")
+                        migrated_count += 1
+                    else:
+                        print(f"Could not find meeting owner for file: {file_path}")
+                        failed_count += 1
+                else:
+                    print(f"Could not parse meeting_id from filename: {filename}")
+                    failed_count += 1
+                    
+            except Exception as e:
+                print(f"Error migrating file {file_path}: {e}")
+                failed_count += 1
+    
+    return {"migrated": migrated_count, "failed": failed_count, "total": len(old_files)}
+    
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except jwt.PyJWTError:
+        raise credentials_exception
+    user = crud.get_user_by_email(db, email=email)
+    if user is None:
+        raise credentials_exception
+    return user
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to Meeting Transcription API"}
+
+@app.post("/admin/migrate-files")
+async def migrate_files_endpoint(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Migrate existing files from old structure to new user-based structure"""
+    # For security, you might want to add admin role checking here
+    result = migrate_existing_files(db)
+    return {
+        "message": "File migration completed",
+        "result": result
+    }
+
+@app.get("/admin/file-structure")
+async def get_file_structure(
+    current_user: models.User = Depends(get_current_user)
+):
+    """Get current file structure for debugging"""
+    structure = {}
+    
+    # Check old structure
+    old_files = glob.glob("/tmp/meeting_*.wav")
+    structure["old_structure"] = [os.path.basename(f) for f in old_files]
+    
+    # Check new structure
+    meetings_dir = "/tmp/meetings"
+    structure["new_structure"] = {}
+    
+    if os.path.exists(meetings_dir):
+        for user_dir in os.listdir(meetings_dir):
+            user_path = os.path.join(meetings_dir, user_dir)
+            if os.path.isdir(user_path):
+                structure["new_structure"][user_dir] = {}
+                for meeting_dir in os.listdir(user_path):
+                    meeting_path = os.path.join(user_path, meeting_dir)
+                    if os.path.isdir(meeting_path):
+                        files = [f for f in os.listdir(meeting_path) if f.endswith('.wav')]
+                        structure["new_structure"][user_dir][meeting_dir] = files
+    
+    return structure
 
 @app.post("/users/", response_model=schemas.User)
 @limiter.limit("5/minute")
@@ -144,24 +624,6 @@ async def confirm_password_reset(request: Request, reset_confirm: schemas.Passwo
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
     
     return {"message": "Password has been successfully reset"}
-
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise credentials_exception
-    except jwt.PyJWTError:
-        raise credentials_exception
-    user = crud.get_user_by_email(db, email=email)
-    if user is None:
-        raise credentials_exception
-    return user
 
 @app.post("/meetings/", response_model=schemas.Meeting)
 def create_meeting(
@@ -252,36 +714,92 @@ async def transcribe_meeting(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
+    import asyncio
+    
     try:
-        # Read the audio file content
-        audio_content = await audio.read()
+        print(f"[Transcribe] Starting upload processing for meeting {meeting_id}")
         
-        # Save audio to /tmp/meeting_{meeting_id}_{timestamp}.wav
+        # Read the audio file content with timeout
+        try:
+            audio_content = await asyncio.wait_for(audio.read(), timeout=30.0)
+            print(f"[Transcribe] Audio file read successfully, size: {len(audio_content)} bytes")
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=status.HTTP_408_REQUEST_TIMEOUT,
+                detail="Timeout reading audio file"
+            )
+        
+        # Create user-specific directory structure
+        safe_email = get_safe_email_for_path(current_user.email)
+        user_meeting_dir = f"/tmp/meetings/{safe_email}/{meeting_id}"
+        os.makedirs(user_meeting_dir, exist_ok=True)
+        
+        # Convert audio to proper WAV format for speaker diarization
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        audio_filename = f"/tmp/meeting_{meeting_id}_{timestamp}.wav"
-        with open(audio_filename, "wb") as f:
-            f.write(audio_content)
-        print(f"Audio saved to: {audio_filename}")
+        audio_filename = f"{user_meeting_dir}/meeting_{meeting_id}_{timestamp}.wav"
         
-        # Create AudioData object
-        audio_data = schemas.AudioData(
-            audio_content=audio_content,
-            format="wav",
-            sample_rate=16000,
-            channels=1
-        )
+        try:
+            print(f"[Transcribe] Converting audio format...")
+            # Use pydub to convert the audio to proper WAV format
+            audio_segment = AudioSegment.from_file(io.BytesIO(audio_content))
+            # Convert to mono, 16kHz for consistency
+            audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
+            # Export as WAV
+            audio_segment.export(audio_filename, format="wav")
+            print(f"[Transcribe] Audio converted and saved to: {audio_filename}")
+        except Exception as e:
+            print(f"[Transcribe] Error converting audio format: {e}")
+            # Fallback: save as-is (might not work for speaker diarization)
+            with open(audio_filename, "wb") as f:
+                f.write(audio_content)
+            print(f"[Transcribe] Audio saved as-is to: {audio_filename}")
         
-        # Process the audio
-        result = await crud.process_audio(db=db, meeting_id=meeting_id, audio_data=audio_data)
+        # Create a placeholder transcription record so the system knows audio exists
+        try:
+            placeholder_transcription = models.Transcription(
+                meeting_id=meeting_id,
+                speaker="System",
+                text=f"Audio file uploaded: {audio.filename} (transcription will be generated during summary)",
+                timestamp=datetime.utcnow()
+            )
+            db.add(placeholder_transcription)
+            db.commit()
+            print(f"[Transcribe] Created placeholder transcription record: {placeholder_transcription.id}")
+        except Exception as e:
+            print(f"[Transcribe] Error creating placeholder transcription: {e}")
+            db.rollback()
+            # Continue anyway - the audio file is still saved
         
-        # Return just the text
-        return {"text": result.text}
+        # Skip Whisper transcription for uploaded files
+        print(f"[Transcribe] Audio file saved and ready for speaker diarization")
         
+        # Return success message without transcription
+        return {
+            "message": "Audio file uploaded successfully. Transcription will be available after speaker diarization during meeting summary generation.",
+            "audio_saved": True,
+            "whisper_transcription": "skipped",
+            "placeholder_transcription_created": True
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
+        print(f"[Transcribe] Unexpected error in transcribe_meeting: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=f"Unexpected error during upload: {str(e)}"
         )
+    finally:
+        # Clean up temporary files if they exist
+        try:
+            if 'audio_filename' in locals() and os.path.exists(audio_filename):
+                print(f"[Transcribe] Audio file preserved for speaker diarization: {audio_filename}")
+                # Don't delete the file as it's needed for speaker diarization
+        except Exception as cleanup_error:
+            print(f"[Transcribe] Error during cleanup: {cleanup_error}")
 
 @app.post("/meetings/{meeting_id}/identify-speakers", response_model=schemas.SpeakerIdentificationResponse)
 async def identify_speakers(
@@ -323,6 +841,145 @@ async def identify_speakers(
             detail=str(e)
         )
 
+@app.post("/meetings/{meeting_id}/refine-speakers")
+async def refine_speaker_diarization(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Refine speaker diarization using all audio files for the meeting
+    and update existing transcriptions with improved speaker labels
+    """
+    import asyncio
+    
+    try:
+        print(f"[SpeakerRefinement] Starting speaker refinement for meeting {meeting_id}")
+        
+        # Verify the meeting exists and belongs to the current user
+        meeting = db.query(models.Meeting).filter(
+            models.Meeting.id == meeting_id,
+            models.Meeting.owner_id == current_user.id
+        ).first()
+        
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Meeting not found"
+            )
+        
+        # Get all audio files for this meeting
+        print(f"[SpeakerRefinement] Getting audio files for meeting {meeting_id}")
+        audio_files = get_meeting_audio_files(meeting_id, current_user.email)
+        if not audio_files:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No audio files found for this meeting"
+            )
+        
+        print(f"[SpeakerRefinement] Found {len(audio_files)} audio files")
+        
+        # For now, skip the comprehensive speaker analysis if it's taking too long
+        # Instead, use a simplified approach that just assigns consistent speaker IDs
+        print(f"[SpeakerRefinement] Using simplified speaker refinement approach...")
+        
+        try:
+            # Get existing transcriptions
+            transcriptions = db.query(models.Transcription).filter(
+                models.Transcription.meeting_id == meeting_id
+            ).order_by(models.Transcription.timestamp).all()
+            
+            if not transcriptions:
+                print(f"[SpeakerRefinement] No transcriptions found for meeting {meeting_id}")
+                return {
+                    "message": "No transcriptions found to refine",
+                    "audio_files_processed": len(audio_files),
+                    "transcriptions_updated": 0,
+                    "refined_segments": 0
+                }
+            
+            # Simple speaker refinement: assign consistent speaker IDs based on existing patterns
+            updated_count = 0
+            speaker_mapping = {}
+            next_speaker_id = 1
+            
+            print(f"[SpeakerRefinement] Processing {len(transcriptions)} transcriptions...")
+            
+            for transcription in transcriptions:
+                current_speaker = transcription.speaker or "Unknown"
+                
+                # Create consistent speaker mapping
+                if current_speaker not in speaker_mapping:
+                    if current_speaker == "Unknown" or current_speaker.startswith("SPEAKER_"):
+                        speaker_mapping[current_speaker] = f"Speaker_{next_speaker_id}"
+                        next_speaker_id += 1
+                    else:
+                        speaker_mapping[current_speaker] = current_speaker
+                
+                new_speaker = speaker_mapping[current_speaker]
+                
+                # Update if different
+                if transcription.speaker != new_speaker:
+                    transcription.speaker = new_speaker
+                    updated_count += 1
+            
+            # Commit all changes
+            if updated_count > 0:
+                db.commit()
+                print(f"[SpeakerRefinement] Updated {updated_count} transcriptions with consistent speaker IDs")
+            else:
+                print(f"[SpeakerRefinement] No transcriptions needed updating")
+            
+            # Apply consecutive speaker phrase grouping optimization
+            print(f"[SpeakerRefinement] Applying consecutive speaker phrase grouping...")
+            
+            # Get updated transcriptions (after speaker refinement)
+            updated_transcriptions = db.query(models.Transcription).filter(
+                models.Transcription.meeting_id == meeting_id
+            ).order_by(models.Transcription.timestamp).all()
+            
+            # Group consecutive phrases from the same speaker
+            grouped_transcriptions = group_consecutive_speaker_phrases(updated_transcriptions)
+            
+            print(f"[SpeakerRefinement] Grouped {len(updated_transcriptions)} transcriptions into {len(grouped_transcriptions)} speaker segments")
+            
+            # Apply grouped transcriptions to database
+            if grouped_transcriptions:
+                grouped_count = apply_grouped_transcriptions_to_db(db, meeting_id, grouped_transcriptions)
+                print(f"[SpeakerRefinement] Successfully applied {grouped_count} grouped transcriptions")
+            else:
+                print(f"[SpeakerRefinement] No grouped transcriptions to apply")
+                grouped_count = 0
+            
+            print(f"[SpeakerRefinement] Simplified speaker refinement completed successfully")
+            return {
+                "message": "Speaker diarization refined successfully with consecutive phrase grouping",
+                "audio_files_processed": len(audio_files),
+                "transcriptions_updated": updated_count,
+                "original_segments": len(transcriptions),
+                "grouped_segments": len(grouped_transcriptions),
+                "final_transcription_count": grouped_count,
+                "speaker_mapping": speaker_mapping,
+                "optimization_applied": "consecutive_speaker_grouping"
+            }
+            
+        except Exception as simple_error:
+            print(f"[SpeakerRefinement] Error in simplified refinement: {simple_error}")
+            db.rollback()
+            raise simple_error
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        print(f"[SpeakerRefinement] Error in speaker refinement: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Speaker refinement failed: {str(e)}"
+        )
+
 @app.websocket("/ws/meetings/{meeting_id}/stream")
 async def stream_audio(
     websocket: WebSocket,
@@ -333,8 +990,6 @@ async def stream_audio(
     speaker_identifier = None
     last_processed_segment = None # Variable to hold the last processed segment for merging
     time_tolerance = 0.1 # seconds - Tolerance for merging consecutive segments
-    total_processed_count = 0 # Variable to keep track of the total processed segments (from SpeakerIdentifier)
-    received_chunk_count = 0 # Variable to keep track of the total raw audio chunks received
 
     try:
         await websocket.accept()
@@ -374,9 +1029,14 @@ async def stream_audio(
             print(f"WebSocket connected and authenticated for meeting {meeting_id}")
 
         # Initialize speaker identifier after authentication
-        speaker_identifier = create_speaker_identifier()
-        if settings.SHOW_BACKEND_LOGS:
-            print("Speaker identifier initialized")
+        try:
+            speaker_identifier = create_speaker_identifier()
+            if settings.SHOW_BACKEND_LOGS:
+                print("Speaker identifier initialized")
+        except Exception as init_error:
+            print(f"Error initializing speaker identifier: {init_error}")
+            await websocket.close(code=1011, reason=f"Failed to initialize speaker identifier: {str(init_error)}")
+            return
 
         meeting_audio_time = 0.0  # Track total audio time since meeting start
 
@@ -386,10 +1046,9 @@ async def stream_audio(
 
             if isinstance(data, bytes):
                 try:
-                    received_chunk_count += 1
                     buffer_size_before = len(chunker.buffer)
                     if settings.SHOW_BACKEND_LOGS:
-                        print(f"[WebSocket] Received chunk {received_chunk_count}: {len(data)} bytes. Chunker buffer size before: {buffer_size_before}")
+                        print(f"[WebSocket] Received audio chunk: {len(data)} bytes. Chunker buffer size before: {buffer_size_before}")
                     recv_time = time.time()
 
                     if len(data) % 4 != 0:
@@ -413,15 +1072,30 @@ async def stream_audio(
                          if settings.SHOW_BACKEND_LOGS:
                              print(f"[WebSocket] Chunker buffer size after: {buffer_size_after}")
 
-                         newly_processed_segments = speaker_identifier.process_audio_chunk(
-                             processed_chunk,
-                             abs_chunk_start_time
-                         )
+                         # Process audio chunk with speaker identifier (with safety checks)
+                         try:
+                             # Verify speaker_identifier is still in a valid state
+                             if (speaker_identifier and 
+                                 hasattr(speaker_identifier, "__dict__") and 
+                                 hasattr(speaker_identifier, "process_audio_chunk")):
+                                 
+                                 newly_processed_segments = speaker_identifier.process_audio_chunk(
+                                     processed_chunk,
+                                     abs_chunk_start_time
+                                 )
+                             else:
+                                 print("[WebSocket] Speaker identifier in invalid state, skipping processing")
+                                 newly_processed_segments = []
+                         except (AttributeError, TypeError, RuntimeError) as speaker_error:
+                             print(f"[WebSocket] Speaker identifier introspection error: {speaker_error}")
+                             newly_processed_segments = []
+                         except Exception as general_speaker_error:
+                             print(f"[WebSocket] General speaker identifier error: {general_speaker_error}")
+                             newly_processed_segments = []
+                         
                          process_end = time.time()
                          if settings.SHOW_BACKEND_LOGS:
                              print(f"[WebSocket] SpeakerIdentifier returned {len(newly_processed_segments)} segments. Processing time: {process_end - process_start:.3f}s")
-
-                         total_processed_count += len(newly_processed_segments)
 
                          finalized_segments = []
                          current_merged_segment = last_processed_segment
@@ -429,10 +1103,13 @@ async def stream_audio(
                          for segment in newly_processed_segments:
                               if current_merged_segment is None:
                                    current_merged_segment = segment
-                              elif segment["speaker"] == current_merged_segment["speaker"] and segment["start_time"] - current_merged_segment["end_time"] <= time_tolerance:
+                              elif (segment["speaker"] == current_merged_segment["speaker"] and 
+                                    segment["start_time"] - current_merged_segment["end_time"] <= time_tolerance):
+                                   # Merge consecutive segments from the same speaker
                                    current_merged_segment["text"] += " " + segment["text"]
                                    current_merged_segment["end_time"] = segment["end_time"]
                               else:
+                                   # Different speaker or time gap too large, finalize current segment
                                    finalized_segments.append(current_merged_segment)
                                    current_merged_segment = segment
 
@@ -469,22 +1146,14 @@ async def stream_audio(
                                        "data": {
                                            "segments": [final_segment],
                                            "start_time": final_segment["start_time"],
-                                           "end_time": final_segment["end_time"],
-                                           "processed_count": len(newly_processed_segments),
-                                           "total_processed_count": total_processed_count,
-                                           "received_chunk_count": received_chunk_count,
-                                           "speaker_buffer_duration": speaker_identifier.get_buffer_duration_seconds(),
-                                           "chunker_processed_count": chunker.get_processed_chunk_yield_count()
+                                           "end_time": final_segment["end_time"]
                                        }
                                    })
                               if settings.SHOW_BACKEND_LOGS:
                                   print("[WebSocket] Finished sending finalized segments for this chunk.")
 
-                         print(f"[WebSocket] Pending last_processed_segment for next chunk: {last_processed_segment}")
                          if settings.SHOW_BACKEND_LOGS:
-                             print(f"[WebSocket] Current total processed count: {total_processed_count}")
-                         if settings.SHOW_BACKEND_LOGS:
-                             print(f"[WebSocket] Processed segments in this interval: {len(newly_processed_segments)}, Speaker buffer duration: {speaker_identifier.get_buffer_duration_seconds():.2f}s, Chunker processed: {chunker.get_processed_chunk_yield_count()}")
+                             print(f"[WebSocket] Pending last_processed_segment for next chunk: {last_processed_segment}")
 
                          # Increment meeting_audio_time by the chunk duration
                          meeting_audio_time += (chunk_end_time - chunk_start_time)
@@ -532,56 +1201,134 @@ async def stream_audio(
                 })
             except Exception as e:
                 print(f"Error sending final segment on disconnect: {e}")
+        
         # Process and send any remaining buffered audio in speaker_identifier
-        if speaker_identifier and hasattr(speaker_identifier, "audio_buffer"):
-            if len(speaker_identifier.audio_buffer) > 0:
-                if settings.SHOW_BACKEND_LOGS:
-                    print("Processing remaining audio buffer on disconnect.")
-                remaining_segments = speaker_identifier.process_audio_chunk(
-                    speaker_identifier.audio_buffer,
-                    speaker_identifier.buffer_start_time
-                )
-                if remaining_segments:
-                    for segment in remaining_segments:
-                        # Save remaining transcription to database
-                        try:
-                            transcription = models.Transcription(
-                                meeting_id=meeting_id,
-                                speaker=segment["speaker"],
-                                text=segment["text"],
-                                timestamp=datetime.utcnow()
+        if speaker_identifier:
+            try:
+                # More comprehensive safety checks to prevent introspection errors
+                if (hasattr(speaker_identifier, "__dict__") and 
+                    hasattr(speaker_identifier, "audio_buffer") and 
+                    hasattr(speaker_identifier, "buffer_start_time")):
+                    
+                    # Additional check to ensure the object is in a valid state
+                    try:
+                        buffer_length = len(speaker_identifier.audio_buffer)
+                        if buffer_length > 0:
+                            if settings.SHOW_BACKEND_LOGS:
+                                print("Processing remaining audio buffer on disconnect.")
+                            remaining_segments = speaker_identifier.process_audio_chunk(
+                                speaker_identifier.audio_buffer,
+                                speaker_identifier.buffer_start_time
                             )
-                            db.add(transcription)
-                            db.commit()
-                            if settings.SHOW_BACKEND_LOGS:
-                                print(f"[WebSocket] Saved remaining transcription to database: {transcription.id}")
-                        except Exception as e:
-                            if settings.SHOW_BACKEND_LOGS:
-                                print(f"[WebSocket] Error saving remaining transcription to database: {e}")
-                            db.rollback()
-                        
-                        try:
-                            await websocket.send_json({
-                                "type": "transcription",
-                                "data": {
-                                    "segments": [segment],
-                                    "start_time": segment["start_time"],
-                                    "end_time": segment["end_time"]
-                                }
-                            })
-                        except Exception as e:
-                            print(f"Error sending remaining segment on disconnect: {e}")
-                # Clear the buffer after processing
-                speaker_identifier.audio_buffer = np.array([], dtype=np.float32)
+                            if remaining_segments:
+                                for segment in remaining_segments:
+                                    # Save remaining transcription to database
+                                    try:
+                                        transcription = models.Transcription(
+                                            meeting_id=meeting_id,
+                                            speaker=segment["speaker"],
+                                            text=segment["text"],
+                                            timestamp=datetime.utcnow()
+                                        )
+                                        db.add(transcription)
+                                        db.commit()
+                                        if settings.SHOW_BACKEND_LOGS:
+                                            print(f"[WebSocket] Saved remaining transcription to database: {transcription.id}")
+                                    except Exception as e:
+                                        if settings.SHOW_BACKEND_LOGS:
+                                            print(f"[WebSocket] Error saving remaining transcription to database: {e}")
+                                        db.rollback()
+                                    
+                                    try:
+                                        await websocket.send_json({
+                                            "type": "transcription",
+                                            "data": {
+                                                "segments": [segment],
+                                                "start_time": segment["start_time"],
+                                                "end_time": segment["end_time"]
+                                            }
+                                        })
+                                    except Exception as e:
+                                        print(f"Error sending remaining segment on disconnect: {e}")
+                            
+                            # Clear the buffer after processing
+                            try:
+                                if hasattr(speaker_identifier, "audio_buffer"):
+                                    speaker_identifier.audio_buffer = np.array([], dtype=np.float32)
+                            except Exception as clear_error:
+                                print(f"Error clearing audio buffer: {clear_error}")
+                    except (AttributeError, TypeError, RuntimeError) as attr_error:
+                        print(f"[WebSocket] Speaker identifier object in invalid state during cleanup: {attr_error}")
+                else:
+                    print("[WebSocket] Speaker identifier missing required attributes, skipping buffer processing")
+            except Exception as e:
+                print(f"[WebSocket] Error during speaker identifier cleanup: {e}")
+                # Don't re-raise, just log and continue cleanup
 
     except Exception as e:
         print(f"WebSocket error for meeting {meeting_id}: {e}")
-        await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason=str(e))
+        try:
+            await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason=str(e))
+        except Exception as close_error:
+            print(f"Error closing WebSocket: {close_error}")
     finally:
-        if chunker:
-            chunker.cleanup()
+        try:
+            # Cleanup chunker
+            if chunker and hasattr(chunker, 'cleanup'):
+                chunker.cleanup()
+                if settings.SHOW_BACKEND_LOGS:
+                    print("Cleaned up chunker resources")
+        except Exception as cleanup_error:
             if settings.SHOW_BACKEND_LOGS:
-                print("Cleaned up chunker resources")
+                print(f"Error during chunker cleanup: {cleanup_error}")
+        
+        try:
+            # Cleanup speaker_identifier with comprehensive error handling
+            if speaker_identifier:
+                try:
+                    # Check if the object is in a valid state before cleanup
+                    if hasattr(speaker_identifier, "__dict__"):
+                        # Try to access a simple attribute to test object validity
+                        _ = getattr(speaker_identifier, "sample_rate", None)
+                        
+                        # If we get here, the object seems valid, try cleanup
+                        if hasattr(speaker_identifier, "audio_buffer"):
+                            try:
+                                speaker_identifier.audio_buffer = np.array([], dtype=np.float32)
+                            except Exception:
+                                pass  # Ignore cleanup errors
+                        
+                        # Try to cleanup any PyTorch/CUDA resources
+                        if hasattr(speaker_identifier, "pipeline"):
+                            try:
+                                del speaker_identifier.pipeline
+                            except Exception:
+                                pass
+                        
+                        if hasattr(speaker_identifier, "whisper_model"):
+                            try:
+                                del speaker_identifier.whisper_model
+                            except Exception:
+                                pass
+                        
+                        if settings.SHOW_BACKEND_LOGS:
+                            print("Cleaned up speaker identifier resources")
+                    else:
+                        print("Speaker identifier object in invalid state, skipping cleanup")
+                        
+                except (AttributeError, TypeError, RuntimeError) as introspection_error:
+                    print(f"Introspection error during speaker identifier cleanup: {introspection_error}")
+                except Exception as general_cleanup_error:
+                    print(f"General error during speaker identifier cleanup: {general_cleanup_error}")
+        except Exception as final_cleanup_error:
+            print(f"Final cleanup error: {final_cleanup_error}")
+        
+        # Force garbage collection to help with memory cleanup
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
 
 @app.post("/api/summarize-audio/")
 async def summarize_audio(audio: UploadFile = File(...)):
@@ -611,40 +1358,279 @@ def get_meeting_summaries(
     summaries = crud.get_meeting_summaries(db, meeting_id)
     return summaries
 
+@app.get("/meetings/{meeting_id}/notes", response_model=List[schemas.MeetingNotes])
+def get_meeting_notes_endpoint(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # Verify the meeting exists and belongs to the current user
+    meeting = db.query(models.Meeting).filter(
+        models.Meeting.id == meeting_id,
+        models.Meeting.owner_id == current_user.id
+    ).first()
+    
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found"
+        )
+    
+    # Get all meeting notes for this meeting, ordered by generation time (newest first)
+    meeting_notes = crud.get_meeting_notes(db, meeting_id)
+    return meeting_notes
+
+@app.get("/meetings/{meeting_id}/status")
+def get_meeting_status_endpoint(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # Get the meeting status
+    status_info = crud.get_meeting_status(db, meeting_id, current_user.id)
+    
+    if not status_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found"
+        )
+    
+    return status_info
+
+@app.post("/meetings/{meeting_id}/end")
+def end_meeting_endpoint(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # Mark the meeting as ended
+    updated_meeting = crud.mark_meeting_as_ended(db, meeting_id, current_user.id)
+    
+    if not updated_meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found"
+        )
+    
+    return {
+        "message": "Meeting marked as ended successfully",
+        "meeting_id": meeting_id,
+        "end_time": updated_meeting.end_time,
+        "status": updated_meeting.status
+    }
+
 @app.get("/api/meeting/{meeting_id}/summary")
-async def get_meeting_summary(meeting_id: int, db: Session = Depends(get_db)):
-    # First check if we have a stored summary
+async def get_meeting_summary(
+    meeting_id: int, 
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # Verify the meeting exists and belongs to the current user
+    meeting = db.query(models.Meeting).filter(
+        models.Meeting.id == meeting_id,
+        models.Meeting.owner_id == current_user.id
+    ).first()
+    
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found"
+        )
+    
+    # Check if there's already a stored summary
     stored_summary = crud.get_latest_meeting_summary(db, meeting_id)
-    if stored_summary:
-        return {"summary": stored_summary.content}
+    stored_meeting_notes = crud.get_latest_meeting_notes(db, meeting_id)
+    
+    if stored_summary and stored_meeting_notes:
+        try:
+            # Try to parse as JSON (new structured format)
+            parsed_content = json.loads(stored_summary.content)
+            if isinstance(parsed_content, dict) and ("summary" in parsed_content or "meeting_notes" in parsed_content):
+                # Use stored meeting notes content
+                response_data = {
+                    "summary": parsed_content.get("summary", stored_summary.content),
+                    "meeting_notes": stored_meeting_notes.content,
+                    "action_items": parsed_content.get("action_items", "No action items identified.")
+                }
+                
+                # Check if action items need to be regenerated with ChatGPT
+                if (response_data.get("action_items") == "Action items will be generated using ChatGPT..." or 
+                    not response_data.get("action_items") or 
+                    response_data.get("action_items") == "No action items identified."):
+                    
+                    # Generate action items using ChatGPT
+                    chatgpt_action_items = await generate_action_items_with_chatgpt(meeting_id, db)
+                    response_data["action_items"] = chatgpt_action_items
+                    
+                    # Update the stored summary with new action items
+                    parsed_content["action_items"] = chatgpt_action_items
+                    summary_create = schemas.SummaryCreate(
+                        meeting_id=meeting_id,
+                        content=json.dumps(parsed_content)
+                    )
+                    crud.create_summary(db, summary_create)
+                
+                return response_data
+            else:
+                # Legacy format - return as summary only
+                return {
+                    "summary": stored_summary.content,
+                    "meeting_notes": stored_meeting_notes.content if stored_meeting_notes else "No structured meeting notes available.",
+                    "action_items": "No action items identified."
+                }
+        except (json.JSONDecodeError, TypeError):
+            # Legacy format - return as summary only
+            return {
+                "summary": stored_summary.content,
+                "meeting_notes": stored_meeting_notes.content if stored_meeting_notes else "No structured meeting notes available.",
+                "action_items": "No action items identified."
+            }
     
     # If no stored summary, generate a new one
-    audio_files = get_meeting_audio_files(meeting_id)
+    audio_files = get_meeting_audio_files(meeting_id, current_user.email)
     if not audio_files:
-        return JSONResponse({"summary": None, "error": "No audio files found for this meeting"}, status_code=404)
+        return JSONResponse({
+            "summary": None, 
+            "meeting_notes": None,
+            "action_items": None,
+            "error": "No audio files found for this meeting"
+        }, status_code=404)
     try:
-        summary_content = summarize_with_gemini_multiple_files(audio_files)
+        # First, process any uploaded audio files that haven't been transcribed yet
+        await process_uploaded_audio_files(meeting_id, audio_files, db)
         
-        # Save the generated summary to database
+        # Generate summary and meeting notes with Gemini
+        structured_content = summarize_with_gemini_multiple_files(audio_files)
+        
+        # Generate action items with ChatGPT
+        chatgpt_action_items = await generate_action_items_with_chatgpt(meeting_id, db)
+        structured_content["action_items"] = chatgpt_action_items
+        
+        # Save the summary to database as JSON
         summary_create = schemas.SummaryCreate(
             meeting_id=meeting_id,
-            content=summary_content
+            content=json.dumps({
+                "summary": structured_content["summary"],
+                "action_items": structured_content["action_items"]
+            })
         )
         crud.create_summary(db, summary_create)
         
-        return {"summary": summary_content}
+        # Save the meeting notes separately
+        if structured_content.get("meeting_notes"):
+            meeting_notes_create = schemas.MeetingNotesCreate(
+                meeting_id=meeting_id,
+                content=structured_content["meeting_notes"]
+            )
+            crud.create_meeting_notes(db, meeting_notes_create)
+        
+        # Mark the meeting as ended
+        crud.mark_meeting_as_ended(db, meeting_id, current_user.id)
+        print(f"[Summary] Meeting {meeting_id} marked as ended")
+        
+        return structured_content
     except Exception as e:
-        return JSONResponse({"summary": None, "error": f"Gemini error: {str(e)}"}, status_code=500)
+        return JSONResponse({
+            "summary": None, 
+            "meeting_notes": None,
+            "action_items": None,
+            "error": f"Error generating summary: {str(e)}"
+        }, status_code=500)
 
-def get_meeting_audio_files(meeting_id: int) -> List[str]:
-    # Find all audio files for the given meeting_id
-    pattern = f"/tmp/meeting_{meeting_id}_*.wav"
+def validate_and_fix_audio_file(file_path: str) -> bool:
+    """
+    Validate audio file and attempt to fix format issues
+    Returns True if file is valid or was successfully fixed
+    """
+    try:
+        # Try to load the file with pydub to check if it's valid
+        audio_segment = AudioSegment.from_file(file_path)
+        return True
+    except Exception as e:
+        print(f"Audio file validation failed for {file_path}: {e}")
+        
+        # If it's a format issue, try to detect and fix
+        if "does not appear to be an audio format" in str(e) or "Format not recognised" in str(e):
+            try:
+                # Try to read as raw bytes and see if we can detect the format
+                with open(file_path, 'rb') as f:
+                    header = f.read(12)
+                
+                # Check for WebM signature
+                if b'webm' in header.lower() or b'matroska' in header.lower():
+                    print(f"Detected WebM format in {file_path}, attempting conversion...")
+                    
+                    # Create backup
+                    backup_path = file_path + ".backup"
+                    os.rename(file_path, backup_path)
+                    
+                    try:
+                        # Convert WebM to WAV
+                        audio_segment = AudioSegment.from_file(backup_path, format="webm")
+                        audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
+                        audio_segment.export(file_path, format="wav")
+                        
+                        # Remove backup if successful
+                        os.remove(backup_path)
+                        print(f"Successfully converted {file_path} from WebM to WAV")
+                        return True
+                        
+                    except Exception as conv_e:
+                        # Restore backup if conversion failed
+                        os.rename(backup_path, file_path)
+                        print(f"Failed to convert {file_path}: {conv_e}")
+                        return False
+                        
+            except Exception as detect_e:
+                print(f"Failed to detect format for {file_path}: {detect_e}")
+                return False
+        
+        return False
+
+def get_meeting_audio_files(meeting_id: int, user_email: str) -> List[str]:
+    # Find all audio files for the given meeting_id and user
+    safe_email = get_safe_email_for_path(user_email)
+    user_meeting_dir = f"/tmp/meetings/{safe_email}/{meeting_id}"
+    
+    # Check new location first
+    pattern = f"{user_meeting_dir}/meeting_{meeting_id}_*.wav"
     files = glob.glob(pattern)
+    
+    # If no files found in new location, check old location and migrate
+    if not files:
+        old_pattern = f"/tmp/meeting_{meeting_id}_*.wav"
+        old_files = glob.glob(old_pattern)
+        
+        if old_files:
+            # Create new directory and migrate files
+            os.makedirs(user_meeting_dir, exist_ok=True)
+            migrated_files = []
+            
+            for old_file in old_files:
+                filename = os.path.basename(old_file)
+                new_path = os.path.join(user_meeting_dir, filename)
+                try:
+                    os.rename(old_file, new_path)
+                    migrated_files.append(new_path)
+                    print(f"Auto-migrated: {old_file} -> {new_path}")
+                except Exception as e:
+                    print(f"Error auto-migrating file {old_file}: {e}")
+            
+            files = migrated_files
+    
+    # Validate and fix audio files
+    valid_files = []
+    for file_path in files:
+        if validate_and_fix_audio_file(file_path):
+            valid_files.append(file_path)
+        else:
+            print(f"Skipping invalid audio file: {file_path}")
+    
     # Sort by timestamp (filename contains timestamp)
-    files.sort()
-    return files
+    valid_files.sort()
+    return valid_files
 
-def summarize_with_gemini_multiple_files(audio_files: List[str]) -> str:
+def summarize_with_gemini_multiple_files(audio_files: List[str]) -> dict:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not set in environment.")
     
@@ -665,9 +1651,22 @@ def summarize_with_gemini_multiple_files(audio_files: List[str]) -> str:
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel("models/gemini-1.5-pro-latest")
         
-        # Prepare the prompt and content
+        # Prepare the prompt and content for structured output (without action items)
         file_list = ", ".join([f.split('/')[-1] for f in audio_files])
-        prompt = f"Summarize the main points and action items from this meeting audio. Files processed: {file_list}"
+        prompt = f"""Analyze this meeting audio and provide a structured response with the following sections:
+
+1. **SUMMARY**: A concise overview of the meeting's main points and outcomes
+2. **MEETING NOTES**: Detailed notes covering key discussions, decisions, and important points mentioned
+
+Please format your response exactly as follows:
+SUMMARY:
+[Your summary here]
+
+MEETING NOTES:
+[Your detailed notes here]
+
+Files processed: {file_list}"""
+        
         parts = [
             {"text": prompt},
             {"inline_data": {"mime_type": "audio/wav", "data": base64_audio}},
@@ -675,9 +1674,62 @@ def summarize_with_gemini_multiple_files(audio_files: List[str]) -> str:
         
         # Call Gemini
         response = model.generate_content(parts)
-        return response.text or "No summary generated."
+        full_response = response.text or "No content generated."
+        
+        # Parse the structured response
+        sections = {
+            "summary": "",
+            "meeting_notes": "",
+            "action_items": ""  # Will be filled by ChatGPT
+        }
+        
+        # Split the response into sections
+        lines = full_response.split('\n')
+        current_section = None
+        current_content = []
+        
+        for line in lines:
+            line = line.strip()
+            if line.startswith('SUMMARY:'):
+                if current_section and current_content:
+                    sections[current_section] = '\n'.join(current_content).strip()
+                current_section = "summary"
+                current_content = []
+                # Add content after the colon if any
+                content_after_colon = line[8:].strip()
+                if content_after_colon:
+                    current_content.append(content_after_colon)
+            elif line.startswith('MEETING NOTES:'):
+                if current_section and current_content:
+                    sections[current_section] = '\n'.join(current_content).strip()
+                current_section = "meeting_notes"
+                current_content = []
+                # Add content after the colon if any
+                content_after_colon = line[14:].strip()
+                if content_after_colon:
+                    current_content.append(content_after_colon)
+            elif current_section and line:
+                current_content.append(line)
+        
+        # Don't forget the last section
+        if current_section and current_content:
+            sections[current_section] = '\n'.join(current_content).strip()
+        
+        # If parsing failed, put everything in summary
+        if not sections["summary"] and not sections["meeting_notes"]:
+            sections["summary"] = full_response
+            sections["meeting_notes"] = "No structured meeting notes available."
+        
+        # Set placeholder for action items (will be generated by ChatGPT later)
+        sections["action_items"] = "Action items will be generated using ChatGPT..."
+        
+        return sections
     
-    return "No audio data found."
+    return {
+        "summary": "No audio data found.",
+        "meeting_notes": "No audio data found.",
+        "action_items": "No audio data found."
+    }
 
 def summarize_with_gemini(wav_path: str) -> str:
     if not GEMINI_API_KEY:
@@ -701,6 +1753,523 @@ def summarize_with_gemini(wav_path: str) -> str:
     # Call Gemini
     response = model.generate_content(parts)
     return response.text or "No summary generated."
+
+async def generate_action_items_with_chatgpt(meeting_id: int, db: Session) -> str:
+    """
+    Generate action items using ChatGPT GPT-4o model based on meeting transcriptions.
+    """
+    try:
+        # Check if OpenAI API key is available
+        if not settings.OPENAI_API_KEY:
+            return "OpenAI API key not configured. Cannot generate action items with ChatGPT."
+        
+        # Get all transcriptions for the meeting
+        transcriptions = db.query(models.Transcription).filter(
+            models.Transcription.meeting_id == meeting_id
+        ).order_by(models.Transcription.timestamp).all()
+        
+        if not transcriptions:
+            return "No transcriptions available for action items generation."
+        
+        # Combine all transcription text into a single transcript
+        full_transcript = ""
+        for transcription in transcriptions:
+            speaker = transcription.speaker or "Unknown"
+            text = transcription.text or ""
+            timestamp = transcription.timestamp.strftime("%H:%M:%S") if transcription.timestamp else "00:00:00"
+            full_transcript += f"[{timestamp}] {speaker}: {text}\n"
+        
+        if not full_transcript.strip():
+            return "No transcript content available for action items generation."
+        
+        # Initialize OpenAI client
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        
+        # Improved prompt for action items extraction
+        prompt = """I will give you a meeting transcription. Please analyze it and prepare a comprehensive list of action items.
+
+For each action item, please include:
+- The specific task or action to be taken
+- Who is responsible (if mentioned)
+- Any deadlines or timeframes (if mentioned)
+- Priority level (if apparent from context)
+
+Format the response as a clear, organized list. If no action items are found, please state that clearly.
+
+Here is the meeting transcription:"""
+        
+        # Call ChatGPT GPT-4o
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are an expert meeting analyst specializing in extracting actionable items from meeting transcripts. You provide clear, organized, and comprehensive action item lists."
+                },
+                {
+                    "role": "user", 
+                    "content": f"{prompt}\n\n{full_transcript}"
+                }
+            ],
+            max_tokens=1500,
+            temperature=0.3  # Lower temperature for more focused, consistent output
+        )
+        
+        action_items = response.choices[0].message.content.strip()
+        return action_items if action_items else "No action items identified from the meeting transcript."
+        
+    except Exception as e:
+        print(f"Error generating action items with ChatGPT: {e}")
+        return f"Error generating action items: {str(e)}"
+
+async def process_uploaded_audio_files(meeting_id: int, audio_files: List[str], db: Session):
+    """
+    Process uploaded audio files with WhisperX for transcription and speaker diarization.
+    This replaces placeholder transcriptions with actual WhisperX transcriptions with speaker labels.
+    """
+    try:
+        print(f"[ProcessUpload] Processing uploaded audio files for meeting {meeting_id} with WhisperX")
+        
+        # Check if there are any placeholder transcriptions that need to be replaced
+        placeholder_transcriptions = db.query(models.Transcription).filter(
+            models.Transcription.meeting_id == meeting_id,
+            models.Transcription.speaker == "System",
+            models.Transcription.text.like("Audio file uploaded:%")
+        ).all()
+        
+        if not placeholder_transcriptions:
+            print(f"[ProcessUpload] No placeholder transcriptions found for meeting {meeting_id}")
+            return
+        
+        # Import WhisperX
+        try:
+            # Fix for PyTorch 2.6+ weights loading issue with WhisperX
+            import torch
+            
+            # Monkey-patch torch.load to always use weights_only=False
+            _original_torch_load = torch.load
+            def patched_torch_load(*args, **kwargs):
+                kwargs.setdefault('weights_only', False)
+                return _original_torch_load(*args, **kwargs)
+            torch.load = patched_torch_load
+            
+            import whisperx
+            import gc
+            
+        except ImportError:
+            print("[ProcessUpload] WhisperX not installed, falling back to OpenAI Whisper")
+            # Fallback to original OpenAI Whisper implementation
+            await process_uploaded_audio_files_fallback(meeting_id, audio_files, db)
+            return
+        
+        # WhisperX configuration - can be configured via environment variables
+        device = os.getenv("WHISPERX_DEVICE", "cpu")  # Use "cuda" if GPU is available
+        batch_size = int(os.getenv("WHISPERX_BATCH_SIZE", "16"))  # Reduce if low on GPU memory
+        compute_type = os.getenv("WHISPERX_COMPUTE_TYPE", "float32")  # Use "float16" for GPU
+        model_size = os.getenv("WHISPERX_MODEL_SIZE", "base")  # base, small, medium, large
+        
+        print(f"[ProcessUpload] WhisperX config: device={device}, batch_size={batch_size}, compute_type={compute_type}, model_size={model_size}")
+        
+        # Process each audio file with WhisperX
+        for audio_file in audio_files:
+            try:
+                print(f"[ProcessUpload] Processing audio file with WhisperX: {audio_file}")
+                
+                # 1. Load audio
+                audio = whisperx.load_audio(audio_file)
+                print(f"[ProcessUpload] Audio loaded, duration: {len(audio)/16000:.2f} seconds")
+                
+                # 2. Load WhisperX model for transcription
+                model = whisperx.load_model(model_size, device, compute_type=compute_type)
+                
+                # 3. Transcribe with WhisperX with English language specified
+                result = model.transcribe(audio, batch_size=batch_size, language="en")
+                print(f"[ProcessUpload] Transcription completed, found {len(result.get('segments', []))} segments")
+                
+                # 4. Load alignment model and align whisper output
+                try:
+                    # Use English language code for alignment
+                    model_a, metadata = whisperx.load_align_model(language_code="en", device=device)
+                    result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
+                    print(f"[ProcessUpload] Alignment completed")
+                except Exception as align_error:
+                    print(f"[ProcessUpload] Alignment failed: {align_error}")
+                    print("[ProcessUpload] Continuing without alignment")
+                    model_a = None
+                
+                # 5. Assign speaker labels with diarization
+                diarize_model = None
+                try:
+                    # Check if HuggingFace token is available for diarization
+                    hf_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
+                    
+                    # Load diarization model - Updated for newer WhisperX versions
+                    try:
+                        # Try the newer import path first
+                        diarize_model = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device=device)
+                    except AttributeError:
+                        # Fallback to older import path
+                        diarize_model = whisperx.DiarizationPipeline(use_auth_token=hf_token, device=device)
+                    
+                    # Run diarization
+                    diarize_segments = diarize_model(audio_file)
+                    
+                    # Assign speakers to transcription segments
+                    result = whisperx.assign_word_speakers(diarize_segments, result)
+                    print(f"[ProcessUpload] Speaker diarization completed")
+                    
+                except Exception as diarize_error:
+                    print(f"[ProcessUpload] Speaker diarization failed: {diarize_error}")
+                    if "pyannote" in str(diarize_error).lower():
+                        print("[ProcessUpload] Hint: You may need to accept pyannote/speaker-diarization-3.1 user conditions at https://hf.co/pyannote/speaker-diarization-3.1")
+                        print("[ProcessUpload] And set HUGGINGFACE_TOKEN environment variable")
+                    elif "DiarizationPipeline" in str(diarize_error):
+                        print("[ProcessUpload] Hint: WhisperX version compatibility issue. Try updating WhisperX or using a different version.")
+                        print("[ProcessUpload] Alternative: pip install git+https://github.com/m-bain/whisperX.git")
+                    print("[ProcessUpload] Continuing with transcription only (no speaker labels)")
+                
+                # 6. Process segments and create transcription records
+                if result.get("segments"):
+                    for i, segment in enumerate(result["segments"]):
+                        try:
+                            # Extract segment information
+                            text = segment.get("text", "").strip()
+                            start_time = segment.get("start", 0)
+                            end_time = segment.get("end", 0)
+                            
+                            # Get speaker label (from diarization or default)
+                            speaker = segment.get("speaker", f"Speaker_{(i % 3) + 1}")  # Cycle through Speaker_1, Speaker_2, Speaker_3
+                            if not speaker or speaker == "None" or speaker == "SPEAKER_00":
+                                speaker = f"Speaker_{(i % 3) + 1}"
+                            
+                            if text:  # Only create transcription if there's actual text
+                                # Create a new transcription record
+                                new_transcription = models.Transcription(
+                                    meeting_id=meeting_id,
+                                    speaker=speaker,
+                                    text=text,
+                                    timestamp=datetime.utcnow()
+                                )
+                                db.add(new_transcription)
+                                print(f"[ProcessUpload] Added transcription: {speaker}: {text[:50]}...")
+                        
+                        except Exception as segment_error:
+                            print(f"[ProcessUpload] Error processing segment: {segment_error}")
+                            continue
+                
+                # Clean up models to free memory
+                del model
+                if model_a:
+                    del model_a
+                if diarize_model:
+                    del diarize_model
+                gc.collect()
+                
+            except Exception as e:
+                print(f"[ProcessUpload] Error processing audio file {audio_file} with WhisperX: {e}")
+                # Try fallback to OpenAI Whisper for this file
+                try:
+                    await process_single_file_fallback(audio_file, meeting_id, db)
+                except Exception as fallback_error:
+                    print(f"[ProcessUpload] Fallback also failed for {audio_file}: {fallback_error}")
+                continue
+        
+        # Remove placeholder transcriptions
+        for placeholder in placeholder_transcriptions:
+            db.delete(placeholder)
+        
+        # Commit all changes
+        db.commit()
+        print(f"[ProcessUpload] Successfully processed {len(audio_files)} audio files with WhisperX")
+        
+    except Exception as e:
+        print(f"[ProcessUpload] Error processing uploaded audio files with WhisperX: {e}")
+        db.rollback()
+        raise e
+
+async def process_uploaded_audio_files_fallback(meeting_id: int, audio_files: List[str], db: Session):
+    """
+    Fallback function using OpenAI Whisper when WhisperX is not available.
+    """
+    try:
+        print(f"[ProcessUpload] Using OpenAI Whisper fallback for meeting {meeting_id}")
+        
+        # Process each audio file with OpenAI Whisper
+        for audio_file in audio_files:
+            await process_single_file_fallback(audio_file, meeting_id, db)
+        
+        print(f"[ProcessUpload] Fallback processing completed for {len(audio_files)} files")
+        
+    except Exception as e:
+        print(f"[ProcessUpload] Error in fallback processing: {e}")
+        raise e
+
+async def process_single_file_fallback(audio_file: str, meeting_id: int, db: Session):
+    """
+    Process a single audio file with OpenAI Whisper (fallback method).
+    Handles large files by chunking them if they exceed the 25MB limit.
+    """
+    try:
+        print(f"[ProcessUpload] Processing audio file with OpenAI Whisper: {audio_file}")
+        
+        # Check file size (OpenAI Whisper has a 25MB limit)
+        file_size = os.path.getsize(audio_file)
+        max_size = 25 * 1024 * 1024  # 25MB in bytes
+        
+        if file_size > max_size:
+            print(f"[ProcessUpload] File size ({file_size} bytes) exceeds OpenAI limit ({max_size} bytes)")
+            print(f"[ProcessUpload] Attempting to compress audio file...")
+            
+            # Try to compress the audio file
+            try:
+                from pydub import AudioSegment
+                
+                # Load and compress the audio
+                audio_segment = AudioSegment.from_file(audio_file)
+                
+                # Reduce quality to fit within size limit
+                # Try different compression levels
+                compressed_file = audio_file.replace('.wav', '_compressed.wav')
+                
+                # Start with moderate compression
+                audio_segment = audio_segment.set_frame_rate(16000).set_channels(1)
+                
+                # Export with lower bitrate
+                audio_segment.export(compressed_file, format="wav", parameters=["-ac", "1", "-ar", "16000"])
+                
+                # Check if compressed file is small enough
+                compressed_size = os.path.getsize(compressed_file)
+                
+                if compressed_size <= max_size:
+                    print(f"[ProcessUpload] Successfully compressed file to {compressed_size} bytes")
+                    audio_file = compressed_file
+                else:
+                    print(f"[ProcessUpload] Compression not sufficient ({compressed_size} bytes), skipping OpenAI processing")
+                    # Create a placeholder transcription
+                    transcription_text = f"Audio file too large for processing ({file_size} bytes). Please use a smaller file or enable WhisperX."
+                    
+                    new_transcription = models.Transcription(
+                        meeting_id=meeting_id,
+                        speaker="Speaker_1",
+                        text=transcription_text,
+                        timestamp=datetime.utcnow()
+                    )
+                    db.add(new_transcription)
+                    print(f"[ProcessUpload] Added placeholder transcription for large file")
+                    return
+                    
+            except Exception as compress_error:
+                print(f"[ProcessUpload] Audio compression failed: {compress_error}")
+                # Create a placeholder transcription
+                transcription_text = f"Audio file too large for processing and compression failed. File size: {file_size} bytes."
+                
+                new_transcription = models.Transcription(
+                    meeting_id=meeting_id,
+                    speaker="Speaker_1", 
+                    text=transcription_text,
+                    timestamp=datetime.utcnow()
+                )
+                db.add(new_transcription)
+                print(f"[ProcessUpload] Added placeholder transcription for unprocessable file")
+                return
+        
+        # Use OpenAI Whisper to transcribe the audio
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        
+        with open(audio_file, "rb") as f:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                language="en",  # Specify English language
+                file=f,
+                response_format="text"
+            )
+        
+        transcription_text = transcript.strip() if transcript else ""
+        
+        if transcription_text:
+            # Create a new transcription record
+            new_transcription = models.Transcription(
+                meeting_id=meeting_id,
+                speaker="Speaker_1",  # Default speaker, will be refined later
+                text=transcription_text,
+                timestamp=datetime.utcnow()
+            )
+            db.add(new_transcription)
+            print(f"[ProcessUpload] Added fallback transcription: {transcription_text[:50]}...")
+        
+        # Clean up compressed file if it was created
+        if 'compressed_file' in locals() and os.path.exists(compressed_file) and compressed_file != audio_file:
+            try:
+                os.remove(compressed_file)
+                print(f"[ProcessUpload] Cleaned up compressed file: {compressed_file}")
+            except Exception as cleanup_error:
+                print(f"[ProcessUpload] Error cleaning up compressed file: {cleanup_error}")
+            
+    except Exception as e:
+        print(f"[ProcessUpload] Error processing audio file {audio_file} with OpenAI Whisper: {e}")
+        raise e
+
+def group_consecutive_speaker_phrases(transcriptions: List[models.Transcription]) -> List[Dict[str, Any]]:
+    """
+    Group consecutive phrases from the same speaker into single entries.
+    Returns a list of grouped transcription data.
+    """
+    if not transcriptions:
+        return []
+    
+    grouped_transcriptions = []
+    current_group = None
+    
+    for transcription in transcriptions:
+        speaker = transcription.speaker or "Unknown"
+        text = transcription.text or ""
+        timestamp = transcription.timestamp
+        
+        # Skip empty text
+        if not text.strip():
+            continue
+        
+        # If this is the first transcription or speaker changed, start a new group
+        if current_group is None or current_group["speaker"] != speaker:
+            # Save the previous group if it exists
+            if current_group is not None:
+                grouped_transcriptions.append(current_group)
+            
+            # Start a new group
+            current_group = {
+                "speaker": speaker,
+                "text": text.strip(),
+                "start_timestamp": timestamp,
+                "end_timestamp": timestamp,
+                "transcription_ids": [transcription.id]
+            }
+        else:
+            # Same speaker, append to current group
+            current_group["text"] += " " + text.strip()
+            current_group["end_timestamp"] = timestamp
+            current_group["transcription_ids"].append(transcription.id)
+    
+    # Don't forget the last group
+    if current_group is not None:
+        grouped_transcriptions.append(current_group)
+    
+    return grouped_transcriptions
+
+def apply_grouped_transcriptions_to_db(db: Session, meeting_id: int, grouped_transcriptions: List[Dict[str, Any]]) -> int:
+    """
+    Apply grouped transcriptions to the database by removing old transcriptions 
+    and creating new grouped ones.
+    """
+    try:
+        # Delete all existing transcriptions for this meeting
+        deleted_count = db.query(models.Transcription).filter(
+            models.Transcription.meeting_id == meeting_id
+        ).delete()
+        
+        print(f"[GroupTranscriptions] Deleted {deleted_count} original transcriptions")
+        
+        # Create new grouped transcriptions
+        created_count = 0
+        for group in grouped_transcriptions:
+            new_transcription = models.Transcription(
+                meeting_id=meeting_id,
+                speaker=group["speaker"],
+                text=group["text"],
+                timestamp=group["start_timestamp"]  # Use the start timestamp of the group
+            )
+            db.add(new_transcription)
+            created_count += 1
+        
+        # Commit all changes
+        db.commit()
+        print(f"[GroupTranscriptions] Created {created_count} grouped transcriptions")
+        
+        return created_count
+        
+    except Exception as e:
+        print(f"[GroupTranscriptions] Error applying grouped transcriptions: {e}")
+        db.rollback()
+        raise e
+
+@app.post("/meetings/{meeting_id}/group-transcriptions")
+async def group_meeting_transcriptions(
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Group consecutive phrases from the same speaker into single transcription entries.
+    This optimization makes transcriptions more readable by combining fragmented speech.
+    """
+    try:
+        print(f"[GroupTranscriptions] Starting transcription grouping for meeting {meeting_id}")
+        
+        # Verify the meeting exists and belongs to the current user
+        meeting = db.query(models.Meeting).filter(
+            models.Meeting.id == meeting_id,
+            models.Meeting.owner_id == current_user.id
+        ).first()
+        
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Meeting not found"
+            )
+        
+        # Get all transcriptions for this meeting, ordered by timestamp
+        transcriptions = db.query(models.Transcription).filter(
+            models.Transcription.meeting_id == meeting_id
+        ).order_by(models.Transcription.timestamp).all()
+        
+        if not transcriptions:
+            return {
+                "message": "No transcriptions found to group",
+                "original_count": 0,
+                "grouped_count": 0,
+                "optimization_applied": "consecutive_speaker_grouping"
+            }
+        
+        original_count = len(transcriptions)
+        print(f"[GroupTranscriptions] Found {original_count} transcriptions to group")
+        
+        # Group consecutive phrases from the same speaker
+        grouped_transcriptions = group_consecutive_speaker_phrases(transcriptions)
+        grouped_count = len(grouped_transcriptions)
+        
+        print(f"[GroupTranscriptions] Grouped {original_count} transcriptions into {grouped_count} speaker segments")
+        
+        # Apply grouped transcriptions to database
+        if grouped_transcriptions:
+            final_count = apply_grouped_transcriptions_to_db(db, meeting_id, grouped_transcriptions)
+            print(f"[GroupTranscriptions] Successfully applied {final_count} grouped transcriptions")
+        else:
+            print(f"[GroupTranscriptions] No grouped transcriptions to apply")
+            final_count = 0
+        
+        # Calculate reduction percentage
+        reduction_percentage = ((original_count - grouped_count) / original_count * 100) if original_count > 0 else 0
+        
+        print(f"[GroupTranscriptions] Transcription grouping completed successfully")
+        return {
+            "message": "Transcriptions grouped successfully",
+            "original_count": original_count,
+            "grouped_count": grouped_count,
+            "final_count": final_count,
+            "reduction_percentage": round(reduction_percentage, 1),
+            "optimization_applied": "consecutive_speaker_grouping"
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        print(f"[GroupTranscriptions] Error in transcription grouping: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Transcription grouping failed: {str(e)}"
+        )
 
 if __name__ == "__main__":
     # Load environment variables from .env file

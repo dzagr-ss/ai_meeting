@@ -4,13 +4,13 @@ import {
   Button, 
   Typography, 
   CircularProgress, 
-  Paper,
   Card,
   CardContent,
   Chip,
   LinearProgress,
   Fade,
   Alert,
+  Divider,
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import { 
@@ -19,13 +19,14 @@ import {
   Stop, 
   PlayArrow,
   Download,
-  Summarize,
   Error as ErrorIcon,
   CheckCircle,
-  History,
+  Upload,
+  AudioFile,
+  EventAvailable,
 } from '@mui/icons-material';
 import { useAppSelector } from '../store/hooks';
-import { GoogleGenAI } from '@google/genai';
+import { fetchWithAuth } from '../utils/api';
 
 // Define a constant for the desired audio sample rate
 const TARGET_SAMPLE_RATE = 16000;
@@ -84,13 +85,14 @@ const RecordingButton = styled(Button, {
     },
 }));
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const StatusCard = styled(Card)(({ theme }) => ({
     background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(139, 92, 246, 0.05) 100%)',
     border: '1px solid rgba(99, 102, 241, 0.1)',
     borderRadius: 16,
 }));
 
-interface StoredSummary {
+export interface StoredSummary {
     id: number;
     meeting_id: number;
     content: string;
@@ -99,42 +101,73 @@ interface StoredSummary {
 
 interface AudioRecorderProps {
     meetingId: number;
-    onTranscriptionUpdate: (transcription: TranscriptionData, processedCount?: number, totalProcessedCount?: number, receivedChunkCount?: number, queuedChunkCount?: number) => void;
+    onTranscriptionUpdate: (transcription: TranscriptionData) => void;
+    onTranscriptionsRefresh?: () => void;
+    onTranscriptChange?: (transcript: string | null) => void;
+    onSummaryChange?: (summary: string | null, storedSummaries: StoredSummary[], loading: boolean) => void;
+    onMeetingNotesChange?: (meetingNotes: string | null, loading: boolean) => void;
+    onActionItemsChange?: (actionItems: string | null, loading: boolean) => void;
 }
 
-const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptionUpdate }) => {
+const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptionUpdate, onTranscriptionsRefresh, onTranscriptChange, onSummaryChange, onMeetingNotesChange, onActionItemsChange }) => {
     const [isRecording, setIsRecording] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [isConnecting, setIsConnecting] = useState(false);
     const [summary, setSummary] = useState<string | null>(null);
     const [storedSummaries, setStoredSummaries] = useState<StoredSummary[]>([]);
     const [loadingStoredSummaries, setLoadingStoredSummaries] = useState(false);
-    const [transcript, setTranscript] = useState<string | null>(null);
+    const [meetingNotes, setMeetingNotes] = useState<string | null>(null);
+    const [actionItems, setActionItems] = useState<string | null>(null);
+    const [isRefiningspeakers, setIsRefiningspeakers] = useState(false);
+    const [speakerRefinementProgress, setSpeakerRefinementProgress] = useState<string>('');
+    const [transcript] = useState<string | null>(null);
+    const [isUploading, setIsUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
+    const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [isSummarizing, setIsSummarizing] = useState(false);
+    const [meetingEnded, setMeetingEnded] = useState(false);
+    const [isMeetingEndedInDatabase, setIsMeetingEndedInDatabase] = useState(false);
     const audioContextRef = useRef<AudioContext | null>(null);
     const websocketRef = useRef<WebSocket | null>(null);
     const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
     const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
     const token = useAppSelector(state => state.auth.token);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
     // Load existing summaries for this meeting
-    const loadStoredSummaries = async () => {
+    const loadStoredSummaries = useCallback(async () => {
         if (!meetingId || !token) return;
         
         setLoadingStoredSummaries(true);
         try {
-            const response = await fetch(`http://localhost:8000/meetings/${meetingId}/summaries`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                },
-            });
+            const response = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/summaries`);
             
             if (response.ok) {
                 const data = await response.json();
                 setStoredSummaries(data);
-                console.log('Loaded stored summaries:', data);
+                
+                // Also extract and set the summary content from the latest summary
+                if (data && data.length > 0) {
+                    const latestSummary = data[0];
+                    try {
+                        // Try to parse as JSON to extract summary content
+                        const parsed = JSON.parse(latestSummary.content);
+                        if (parsed.summary) {
+                            setSummary(parsed.summary);
+                        } else {
+                            // If no summary field in JSON, use the entire content
+                            setSummary(latestSummary.content);
+                        }
+                    } catch (parseError) {
+                        // If not JSON format, use the content as-is
+                        setSummary(latestSummary.content);
+                    }
+                } else {
+                    console.log('No stored summaries found');
+                }
             } else {
                 console.error('Failed to load stored summaries:', response.status);
             }
@@ -143,7 +176,97 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
         } finally {
             setLoadingStoredSummaries(false);
         }
-    };
+    }, [meetingId, token]);
+
+    // Load existing meeting notes for this meeting
+    const loadStoredMeetingNotes = useCallback(async () => {
+        if (!meetingId || !token) return;
+        
+        try {
+            const response = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/notes`);
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data && data.length > 0) {
+                    // Get the latest meeting notes (first item since backend returns them ordered by newest first)
+                    const latestNotes = data[0];
+                    setMeetingNotes(latestNotes.content);
+                } else {
+                    console.log('No stored meeting notes found');
+                }
+            } else {
+                console.error('Failed to load stored meeting notes:', response.status);
+            }
+        } catch (error) {
+            console.error('Error loading stored meeting notes:', error);
+        }
+    }, [meetingId, token]);
+
+    // Load existing action items from the latest summary for this meeting
+    const loadStoredActionItems = useCallback(async () => {
+        if (!meetingId || !token) return;
+        
+        try {
+            const response = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/summaries`);
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data && data.length > 0) {
+                    // Get the latest summary (first item since backend returns them ordered by newest first)
+                    const latestSummary = data[0];
+                    try {
+                        // Try to parse as JSON to extract action items
+                        const parsed = JSON.parse(latestSummary.content);
+                        if (parsed.action_items) {
+                            setActionItems(parsed.action_items);
+                        } else {
+                            console.log('No action items found in stored summary');
+                        }
+                    } catch (parseError) {
+                        console.log('Summary is not in JSON format, no action items available');
+                    }
+                } else {
+                    console.log('No stored summaries found for action items');
+                }
+            } else {
+                console.error('Failed to load stored summaries for action items:', response.status);
+            }
+        } catch (error) {
+            console.error('Error loading stored action items:', error);
+        }
+    }, [meetingId, token]);
+
+    // Load all stored data for this meeting
+    const loadAllStoredData = useCallback(async () => {
+        if (!meetingId || !token) return;
+        
+        // Load all data concurrently
+        await Promise.all([
+            loadStoredSummaries(),
+            loadStoredMeetingNotes(),
+            loadStoredActionItems()
+        ]);
+    }, [meetingId, token, loadStoredSummaries, loadStoredMeetingNotes, loadStoredActionItems]);
+
+    // Check if the meeting is ended in the database
+    const checkMeetingStatus = useCallback(async () => {
+        if (!meetingId || !token) return;
+        
+        try {
+            const response = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/status`);
+            
+            if (response.ok) {
+                const data = await response.json();
+                const isEnded = data.is_ended || false;
+                setIsMeetingEndedInDatabase(isEnded);
+                console.log(`[AudioRecorder] Meeting ${meetingId} ended status:`, isEnded);
+            } else {
+                console.error('Failed to check meeting status:', response.status);
+            }
+        } catch (error) {
+            console.error('Error checking meeting status:', error);
+        }
+    }, [meetingId, token]);
 
     const connectWebSocket = async () => {
         if (!token) {
@@ -198,8 +321,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
                             start_time: message.data.start_time,
                             end_time: message.data.end_time,
                         };
-                        // Pass transcription data and processed_count up to parent
-                        onTranscriptionUpdate(transcriptionData, message.data.processed_count, message.data.total_processed_count, message.data.received_chunk_count, message.data.queued_chunk_count);
+                        // Pass transcription data up to parent
+                        onTranscriptionUpdate(transcriptionData);
                     } else if (message.type === 'audio_chunk') {
                         // Assuming the backend sends audio chunk data
                         // const audioChunk = new Float32Array(message.data.audio_chunk); // Convert to Float32Array
@@ -221,9 +344,15 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
             ws.onclose = (event) => {
                 console.log('WebSocket closed:', event.code, event.reason);
                 if (event.code === 1008) {
-                    if (event.reason === 'Token has expired') {
+                    if (event.reason === 'Token has expired' || event.reason === 'Invalid or expired token') {
                         setError('Session expired. Please log in again.');
-                        // You might want to trigger a logout or token refresh here
+                        // Import and dispatch logout action
+                        import('../store/slices/authSlice').then(({ logout }) => {
+                            import('../store').then(({ store }) => {
+                                store.dispatch(logout());
+                                window.location.href = '/login';
+                            });
+                        });
                     } else {
                         setError(`Authentication failed: ${event.reason || 'Unknown reason'}`);
                     }
@@ -491,34 +620,24 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
                     const audioBlob = new Blob(currentChunks, { type: 'audio/webm' });
                     const formData = new FormData();
                     formData.append('audio', audioBlob, 'recording.webm');
-                    console.log('[AudioRecorder] Uploading audio to backend for meeting', meetingId, 'Blob size:', audioBlob.size);
                     
-                    fetch(`http://localhost:8000/meetings/${meetingId}/transcribe`, {
+                    fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/transcribe`, {
                         method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${token}`,
-                        },
                         body: formData,
                     })
                     .then(async (uploadResponse) => {
-                        console.log('[AudioRecorder] Audio upload response:', uploadResponse.status, uploadResponse.statusText);
                         if (!uploadResponse.ok) {
                             const errorText = await uploadResponse.text();
                             console.error('[AudioRecorder] Audio upload failed:', errorText);
-                            setError('Failed to upload audio for transcription: ' + errorText);
+                            setError('Failed to upload audio: ' + errorText);
                         } else {
                             console.log('[AudioRecorder] Audio upload successful');
-                            // After successful upload, fetch the summary
-                            if (meetingId && typeof meetingId === 'number' && !isNaN(meetingId)) {
-                                console.log('[AudioRecorder] Fetching summary for meeting', meetingId);
-                                setTimeout(() => {
-                                    fetchSummary(meetingId);
-                                }, 1000); // 1 second delay to ensure backend processing
-                            }
+                            // Reload stored summaries to include the new one
+                            loadAllStoredData();
                         }
                     })
                     .catch((err) => {
-                        setError('Failed to upload audio for transcription');
+                        setError('Failed to upload audio');
                         console.error('[AudioRecorder] Audio upload error:', err);
                     });
 
@@ -538,13 +657,23 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
             setError(error instanceof Error ? error.message : 'Failed to stop recording');
             setIsRecording(false); // Ensure recording state is reset even on error
         }
-    }, [meetingId, token]);
+    }, [meetingId, loadAllStoredData]);
 
     const fetchSummary = async (meetingId: number) => {
+        if (!token) {
+            setSummary('Authentication required to fetch summary.');
+            setMeetingNotes('Authentication required to fetch meeting notes.');
+            setActionItems('Authentication required to fetch action items.');
+            console.error('[AudioRecorder] No token available for summary fetch');
+            return;
+        }
+        
         setSummary('Summarizing...');
+        setMeetingNotes('Generating meeting notes...');
+        setActionItems('Identifying action items...');
         console.log('[AudioRecorder] Starting fetchSummary for meeting', meetingId);
         try {
-            const response = await fetch(`http://localhost:8000/api/meeting/${meetingId}/summary`);
+            const response = await fetchWithAuth(`http://localhost:8000/api/meeting/${meetingId}/summary`);
             console.log('[AudioRecorder] Summary fetch response:', response.status, response.statusText);
             const contentType = response.headers.get('content-type');
             if (!response.ok) {
@@ -553,7 +682,14 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
                 if (contentType && contentType.includes('application/json')) {
                     try {
                         const data = await response.json();
-                        if (data && data.error) errorMsg = data.error;
+                        if (data && data.error) {
+                            // Check if it's the "no audio files" error and show a more user-friendly message
+                            if (data.error.includes('No audio files found for this meeting')) {
+                                errorMsg = 'No audio has been recorded or uploaded for this meeting yet. Please record audio or upload an audio file first.';
+                            } else {
+                                errorMsg = data.error;
+                            }
+                        }
                         console.error('[AudioRecorder] Summary fetch error data:', data);
                     } catch (e) {
                         console.error('[AudioRecorder] Error parsing summary error JSON:', e);
@@ -564,77 +700,384 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
                     console.error('[AudioRecorder] Summary fetch error: not JSON');
                 }
                 setSummary(errorMsg);
+                setMeetingNotes(errorMsg);
+                setActionItems(errorMsg);
                 return;
             }
             if (contentType && contentType.includes('application/json')) {
                 const data = await response.json();
                 console.log('[AudioRecorder] Summary fetch data:', data);
-                if (!data.summary) {
-                    setSummary(data.error || 'No summary available for this meeting.');
-                } else {
-                    setSummary(data.summary);
-                    console.log('[Summary] Received summary:', data.summary);
+                
+                // Handle structured response
+                if (data.summary !== undefined || data.meeting_notes !== undefined || data.action_items !== undefined) {
+                    setSummary(data.summary || 'No summary available for this meeting.');
+                    setMeetingNotes(data.meeting_notes || 'No meeting notes available for this meeting.');
+                    setActionItems(data.action_items || 'No action items identified for this meeting.');
+                    console.log('[Summary] Received structured content:', {
+                        summary: data.summary,
+                        meetingNotes: data.meeting_notes,
+                        actionItems: data.action_items
+                    });
                     // Reload stored summaries to include the new one
-                    loadStoredSummaries();
+                    loadAllStoredData();
+                } else if (data.error) {
+                    const errorMsg = data.error || 'No content available for this meeting.';
+                    setSummary(errorMsg);
+                    setMeetingNotes(errorMsg);
+                    setActionItems(errorMsg);
+                } else {
+                    // Legacy format - single summary field
+                    setSummary(data.summary || 'No summary available for this meeting.');
+                    setMeetingNotes('No structured meeting notes available.');
+                    setActionItems('No action items identified.');
                 }
             } else {
-                setSummary('Server error: response is not JSON.');
+                const errorMsg = 'Server error: response is not JSON.';
+                setSummary(errorMsg);
+                setMeetingNotes(errorMsg);
+                setActionItems(errorMsg);
                 console.error('[AudioRecorder] Summary fetch: response is not JSON');
             }
         } catch (err) {
-            setSummary('Error summarizing audio');
+            const errorMsg = 'Error summarizing audio';
+            setSummary(errorMsg);
+            setMeetingNotes(errorMsg);
+            setActionItems(errorMsg);
             console.error('[AudioRecorder] Summary fetch error:', err);
         }
     };
 
-    const summarizeAudioWithGemini = async (audioBlob: Blob, apiKey: string): Promise<{ transcript: string, summary: string }> => {
-        // Read file as base64
-        const base64Audio = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                try {
-                    const base64data = reader.result as string;
-                    const base64Audio = base64data.split(',')[1];
-                    resolve(base64Audio);
-                } catch (err) {
-                    reject(err);
+    const refineSpeakerDiarization = async (meetingId: number) => {
+        if (!token) {
+            console.error('[AudioRecorder] No token available for speaker refinement');
+            return;
+        }
+        
+        setIsRefiningspeakers(true);
+        setSpeakerRefinementProgress('Initializing speaker refinement...');
+        console.log('[AudioRecorder] Starting speaker diarization refinement for meeting', meetingId);
+        console.log('[AudioRecorder] onTranscriptionsRefresh callback available:', !!onTranscriptionsRefresh);
+        
+        try {
+            setSpeakerRefinementProgress('Processing speakers with simplified approach...');
+            
+            // Create an AbortController for request cancellation with shorter timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => {
+                controller.abort();
+            }, 2 * 60 * 1000); // Reduced to 2 minute timeout
+            
+            const response = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/refine-speakers`, {
+                method: 'POST',
+                signal: controller.signal,
+            });
+            
+            clearTimeout(timeoutId);
+            
+            console.log('[AudioRecorder] Speaker refinement response:', response.status, response.statusText);
+            
+            if (response.ok) {
+                setSpeakerRefinementProgress('Updating transcriptions...');
+                const data = await response.json();
+                console.log('[AudioRecorder] Speaker refinement successful:', data);
+                console.log(`[SpeakerRefinement] Processed ${data.audio_files_processed} audio files, updated ${data.transcriptions_updated} transcriptions`);
+                
+                setSpeakerRefinementProgress('Refreshing transcriptions...');
+                
+                // Trigger refresh of stored transcriptions in parent component
+                if (onTranscriptionsRefresh) {
+                    console.log('[AudioRecorder] Triggering transcriptions refresh after speaker refinement');
+                    // Add a small delay to ensure database updates are committed
+                    setTimeout(() => {
+                        onTranscriptionsRefresh();
+                        setSpeakerRefinementProgress('Speaker refinement completed successfully!');
+                    }, 500);
                 }
-            };
-            reader.onerror = () => reject(reader.error);
-            reader.readAsDataURL(audioBlob);
-        });
+                
+                // Also try direct refresh as backup
+                console.log('[AudioRecorder] Also triggering direct transcriptions refresh as backup');
+                setTimeout(async () => {
+                    try {
+                        const refreshResponse = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/transcriptions`);
+                        if (refreshResponse.ok) {
+                            const refreshData = await refreshResponse.json();
+                            console.log('[AudioRecorder] Direct refresh successful, got', refreshData.length, 'transcriptions');
+                            // Emit a custom event that the parent can listen to
+                            window.dispatchEvent(new CustomEvent('transcriptionsUpdated', { 
+                                detail: { transcriptions: refreshData, meetingId } 
+                            }));
+                        }
+                    } catch (err) {
+                        console.error('[AudioRecorder] Direct refresh failed:', err);
+                    }
+                }, 1000);
+            } else {
+                const errorText = await response.text();
+                console.error('[AudioRecorder] Speaker refinement failed:', errorText);
+                
+                // Check if it's the "no audio files" error and show a more user-friendly message
+                if (errorText.includes('No audio files found for this meeting')) {
+                    setSpeakerRefinementProgress('No audio files found. Please record or upload audio first.');
+                } else {
+                    setSpeakerRefinementProgress('Speaker refinement failed. Please try again.');
+                }
+                
+                setTimeout(() => {
+                    setSpeakerRefinementProgress('');
+                }, 3000);
+                throw new Error(`Speaker refinement failed: ${response.status} ${response.statusText}`);
+            }
+        } catch (err) {
+            if (err instanceof Error && err.name === 'AbortError') {
+                console.error('[AudioRecorder] Speaker refinement was aborted due to timeout');
+                setSpeakerRefinementProgress('Speaker refinement timed out. Using simplified approach next time.');
+                // Don't throw error for timeout, just show message
+                setTimeout(() => {
+                    setSpeakerRefinementProgress('');
+                }, 4000);
+            } else {
+                console.error('[AudioRecorder] Speaker refinement error:', err);
+                setSpeakerRefinementProgress('Speaker refinement error. Please try again.');
+                setTimeout(() => {
+                    setSpeakerRefinementProgress('');
+                }, 3000);
+                throw err;
+            }
+        } finally {
+            setTimeout(() => {
+                setIsRefiningspeakers(false);
+                if (!speakerRefinementProgress.includes('completed') && !speakerRefinementProgress.includes('timed out')) {
+                    setSpeakerRefinementProgress('');
+                }
+            }, 2000);
+        }
+    };
 
-        const genAI = new GoogleGenAI({ apiKey, apiVersion: 'v1alpha' });
-        // 1. Transcribe
-        const transcriptionPrompt = 'Generate a complete, detailed transcript of this audio.';
-        const transcriptionContents = [
-            { text: transcriptionPrompt },
-            { inlineData: { mimeType: audioBlob.type || 'audio/webm', data: base64Audio } },
-        ];
-        const transcriptionResponse = await genAI.models.generateContent({
-            model: 'gemini-2.5-flash-preview-04-17',
-            contents: transcriptionContents,
-        });
-        const transcript = transcriptionResponse.text || '';
+    const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (file) {
+            // Check if file is an audio file
+            if (!file.type.startsWith('audio/')) {
+                setError('Please select an audio file');
+                return;
+            }
+            
+            // Check file size (limit to 100MB)
+            const maxSize = 100 * 1024 * 1024; // 100MB
+            if (file.size > maxSize) {
+                setError('File size must be less than 100MB');
+                return;
+            }
+            
+            setSelectedFile(file);
+            setError(null);
+        }
+    };
 
-        // 2. Summarize
-        const summaryPrompt = 'Summarize the main points and action items from this meeting transcript.';
-        const summaryContents = [
-            { text: summaryPrompt + '\n\n' + transcript },
-        ];
-        const summaryResponse = await genAI.models.generateContent({
-            model: 'gemini-2.5-flash-preview-04-17',
-            contents: summaryContents,
-        });
-        const summary = summaryResponse.text || '';
+    const uploadAudioFile = async () => {
+        if (!selectedFile || !token || !meetingId) {
+            setError('Please select a file and ensure you are authenticated');
+            return;
+        }
 
-        return { transcript, summary };
+        setIsUploading(true);
+        setUploadProgress(0);
+        setError(null);
+
+        try {
+            const formData = new FormData();
+            formData.append('audio', selectedFile);
+
+            // Create XMLHttpRequest to track upload progress
+            const xhr = new XMLHttpRequest();
+            
+            // Set up progress tracking
+            xhr.upload.addEventListener('progress', (event) => {
+                if (event.lengthComputable) {
+                    const progress = Math.round((event.loaded / event.total) * 100);
+                    setUploadProgress(progress);
+                }
+            });
+
+            // Set up response handling
+            const uploadPromise = new Promise<Response>((resolve, reject) => {
+                xhr.onload = () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        // Create a Response-like object
+                        const response = {
+                            ok: true,
+                            status: xhr.status,
+                            statusText: xhr.statusText,
+                            json: () => Promise.resolve(JSON.parse(xhr.responseText)),
+                            text: () => Promise.resolve(xhr.responseText)
+                        } as Response;
+                        resolve(response);
+                    } else {
+                        reject(new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`));
+                    }
+                };
+                xhr.onerror = () => reject(new Error('Upload failed'));
+                xhr.onabort = () => reject(new Error('Upload aborted'));
+            });
+
+            // Start the upload
+            xhr.open('POST', `http://localhost:8000/meetings/${meetingId}/transcribe`);
+            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+            xhr.send(formData);
+
+            // Wait for upload to complete
+            const response = await uploadPromise;
+
+            if (response.ok) {
+                setUploadProgress(100);
+                
+                // Clear the selected file
+                setSelectedFile(null);
+                
+                // Reset file input
+                const fileInput = document.getElementById('audio-file-input') as HTMLInputElement;
+                if (fileInput) {
+                    fileInput.value = '';
+                }
+
+                // Note: No longer automatically triggering summary and speaker refinement here
+                // These will be triggered manually by the "Meeting Ended" button
+
+                // Trigger transcriptions refresh
+                if (onTranscriptionsRefresh) {
+                    setTimeout(() => {
+                        onTranscriptionsRefresh();
+                    }, 1000);
+                }
+            } else {
+                const errorText = await response.text();
+                console.error('[AudioRecorder] File upload failed:', errorText);
+                setError('Failed to upload audio: ' + errorText);
+            }
+        } catch (error) {
+            console.error('[AudioRecorder] File upload error:', error);
+            setError(error instanceof Error ? error.message : 'Failed to upload audio file');
+        } finally {
+            setIsUploading(false);
+            setUploadProgress(0);
+        }
+    };
+
+    const handleMeetingEnded = async () => {
+        if (!meetingId || !token) {
+            setError('Meeting ID or authentication token not available');
+            return;
+        }
+
+        // First, check if there are any transcriptions for this meeting
+        try {
+            const transcriptionsResponse = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/transcriptions`);
+            if (transcriptionsResponse.ok) {
+                const transcriptionsData = await transcriptionsResponse.json();
+                if (!transcriptionsData || transcriptionsData.length === 0) {
+                    setError('No audio has been recorded or uploaded for this meeting yet. Please record audio or upload an audio file before ending the meeting.');
+                    return;
+                }
+                console.log(`[AudioRecorder] Found ${transcriptionsData.length} transcriptions for meeting ${meetingId}`);
+                
+                // Check if all transcriptions are just placeholder transcriptions
+                const realTranscriptions = transcriptionsData.filter((t: any) => 
+                    !(t.speaker === "System" && t.text && t.text.includes("Audio file uploaded:"))
+                );
+                
+                if (realTranscriptions.length === 0 && transcriptionsData.length > 0) {
+                    console.log(`[AudioRecorder] Found ${transcriptionsData.length} placeholder transcriptions, proceeding with summary generation`);
+                }
+            } else {
+                console.warn('[AudioRecorder] Could not check transcriptions, proceeding anyway');
+            }
+        } catch (error) {
+            console.warn('[AudioRecorder] Error checking transcriptions:', error);
+            // Continue anyway - the backend will handle the error
+        }
+
+        setIsSummarizing(true);
+        setMeetingEnded(true);
+        
+        try {
+            console.log('[AudioRecorder] Meeting ended - starting summarization and speaker refinement');
+            
+            // First, mark the meeting as ended in the database
+            try {
+                const endMeetingResponse = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/end`, {
+                    method: 'POST'
+                });
+                
+                if (endMeetingResponse.ok) {
+                    const endMeetingData = await endMeetingResponse.json();
+                    console.log('[AudioRecorder] Meeting marked as ended in database:', endMeetingData);
+                    setIsMeetingEndedInDatabase(true);
+                } else {
+                    console.warn('[AudioRecorder] Failed to mark meeting as ended in database:', endMeetingResponse.status);
+                }
+            } catch (error) {
+                console.warn('[AudioRecorder] Error marking meeting as ended:', error);
+                // Continue with the process even if this fails
+            }
+            
+            // Use Promise.all to run processes concurrently but with proper error handling
+            const promises = [];
+            
+            // Add speaker refinement with timeout
+            const speakerRefinementPromise = new Promise(async (resolve, reject) => {
+                try {
+                    // Set a timeout for speaker refinement (5 minutes max)
+                    const timeoutId = setTimeout(() => {
+                        reject(new Error('Speaker refinement timed out after 5 minutes'));
+                    }, 5 * 60 * 1000);
+                    
+                    await refineSpeakerDiarization(meetingId);
+                    clearTimeout(timeoutId);
+                    resolve('Speaker refinement completed');
+                } catch (error) {
+                    reject(error);
+                }
+            });
+            
+            promises.push(speakerRefinementPromise);
+            
+            // Wait for speaker refinement to complete first
+            try {
+                await Promise.race([
+                    speakerRefinementPromise,
+                    new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('Speaker refinement timeout')), 5 * 60 * 1000)
+                    )
+                ]);
+                console.log('[AudioRecorder] Speaker refinement completed');
+            } catch (error) {
+                console.warn('[AudioRecorder] Speaker refinement failed or timed out:', error);
+                // Continue with summary generation even if speaker refinement fails
+            }
+            
+            // Then fetch summary (which includes meeting notes and action items)
+            try {
+                await fetchSummary(meetingId);
+                console.log('[AudioRecorder] Summary generation completed');
+            } catch (error) {
+                console.error('[AudioRecorder] Summary generation failed:', error);
+                throw new Error('Failed to generate meeting summary');
+            }
+            
+            console.log('[AudioRecorder] Meeting ended process completed successfully');
+        } catch (error) {
+            console.error('[AudioRecorder] Error in meeting ended process:', error);
+            setError(`Failed to process meeting summary: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        } finally {
+            setIsSummarizing(false);
+        }
     };
 
     useEffect(() => {
-        // Load stored summaries on component mount
-        loadStoredSummaries();
-    }, [meetingId, token]);
+        // Load all stored data (summaries, meeting notes, action items) and check meeting status on component mount
+        loadAllStoredData();
+        checkMeetingStatus();
+    }, [meetingId, loadAllStoredData, checkMeetingStatus]);
 
     useEffect(() => {
         // Cleanup on component unmount only
@@ -642,6 +1085,30 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
             stopRecording();
         };
     }, [stopRecording]);
+
+    useEffect(() => {
+        if (onTranscriptChange) {
+            onTranscriptChange(transcript);
+        }
+    }, [transcript, onTranscriptChange]);
+
+    useEffect(() => {
+        if (onSummaryChange) {
+            onSummaryChange(summary, storedSummaries, loadingStoredSummaries);
+        }
+    }, [summary, storedSummaries, loadingStoredSummaries, onSummaryChange]);
+
+    useEffect(() => {
+        if (onMeetingNotesChange) {
+            onMeetingNotesChange(meetingNotes, loadingStoredSummaries);
+        }
+    }, [meetingNotes, loadingStoredSummaries, onMeetingNotesChange]);
+
+    useEffect(() => {
+        if (onActionItemsChange) {
+            onActionItemsChange(actionItems, loadingStoredSummaries);
+        }
+    }, [actionItems, loadingStoredSummaries, onActionItemsChange]);
 
     return (
         <AudioRecorderContainer>
@@ -658,229 +1125,317 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
                 </Fade>
             )}
 
-            {/* Main Recording Section */}
-            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <Mic color="primary" sx={{ fontSize: 32 }} />
-                    <Typography variant="h5" fontWeight={600}>
-                        Audio Recording
-                    </Typography>
-                </Box>
-
-                {/* Recording Button */}
-                <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <RecordingButton
-                        isRecording={isRecording}
-                        onClick={isRecording ? stopRecording : startRecording}
-                        disabled={isConnecting}
-                        variant="contained"
-                    >
-                        {isConnecting ? (
-                            <CircularProgress size={32} sx={{ color: 'white' }} />
-                        ) : isRecording ? (
-                            <Stop sx={{ fontSize: 32 }} />
-                        ) : (
-                            <PlayArrow sx={{ fontSize: 32 }} />
-                        )}
-                    </RecordingButton>
-                    
-                    {/* Recording pulse animation */}
-                    {isRecording && (
-                        <Box
-                            sx={{
-                                position: 'absolute',
-                                width: 140,
-                                height: 140,
-                                borderRadius: '50%',
-                                border: '2px solid rgba(239, 68, 68, 0.3)',
-                                animation: 'pulse 2s infinite',
-                                pointerEvents: 'none', // This prevents the animation from blocking clicks
-                                '@keyframes pulse': {
-                                    '0%': {
-                                        transform: 'scale(1)',
-                                        opacity: 1,
-                                    },
-                                    '100%': {
-                                        transform: 'scale(1.2)',
-                                        opacity: 0,
-                                    },
-                                },
-                            }}
-                        />
-                    )}
-                </Box>
-
-                {/* Status Text */}
-                <Typography 
-                    variant="h6" 
-                    color={isRecording ? 'error.main' : 'text.secondary'}
-                    fontWeight={500}
-                >
-                    {isConnecting ? 'Connecting to server...' : 
-                     isRecording ? 'Recording in progress' : 
-                     'Ready to record'}
-                </Typography>
-
-
-
-                {/* Status Chips */}
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center' }}>
-                    <Chip
-                        icon={isRecording ? <Mic /> : <MicOff />}
-                        label={isRecording ? 'Live' : 'Stopped'}
-                        color={isRecording ? 'error' : 'default'}
-                        variant={isRecording ? 'filled' : 'outlined'}
-                    />
-                    {isConnecting && (
-                        <Chip
-                            icon={<CircularProgress size={16} />}
-                            label="Connecting"
-                            color="warning"
-                            variant="outlined"
-                        />
-                    )}
-                </Box>
-            </Box>
-
-            {/* Transcript Section */}
-            {transcript && (
+            {/* Show meeting ended message if meeting is ended in database */}
+            {isMeetingEndedInDatabase ? (
                 <Fade in={true}>
-                    <StatusCard>
-                        <CardContent sx={{ p: 3 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                                <CheckCircle color="success" />
-                                <Typography variant="h6" fontWeight={600}>
-                                    Transcript
-                                </Typography>
-                            </Box>
-                            <Typography variant="body1" sx={{ lineHeight: 1.6 }}>
-                                {transcript}
+                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, py: 4 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                            <CheckCircle color="success" sx={{ fontSize: 48 }} />
+                            <Typography variant="h4" fontWeight={600} color="success.main">
+                                Meeting Ended
                             </Typography>
-                        </CardContent>
-                    </StatusCard>
-                </Fade>
-            )}
+                        </Box>
+                        
+                        <Alert 
+                            severity="success" 
+                            sx={{ 
+                                borderRadius: 2,
+                                maxWidth: 600,
+                                '& .MuiAlert-message': {
+                                    textAlign: 'center'
+                                }
+                            }}
+                        >
+                            <Typography variant="body1">
+                                <strong>This meeting has been completed.</strong><br />
+                                You can view the meeting summary, notes, and action items below.
+                                Recording and uploading are no longer available for this meeting.
+                            </Typography>
+                        </Alert>
 
-            {/* Summary Section */}
-            {(storedSummaries.length > 0 || summary || loadingStoredSummaries) && (
-                <Fade in={true}>
-                    <StatusCard>
-                        <CardContent sx={{ p: 3 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                                <Summarize color="primary" />
-                                <Typography variant="h6" fontWeight={600}>
-                                    Meeting Summaries
-                                </Typography>
-                                {storedSummaries.length > 0 && (
-                                    <Chip 
-                                        label={`${storedSummaries.length} stored`} 
-                                        size="small" 
-                                        color="primary" 
-                                        variant="outlined" 
+                        <Chip
+                            icon={<CheckCircle />}
+                            label="Meeting Completed"
+                            color="success"
+                            variant="filled"
+                            sx={{ fontSize: '1rem', py: 2, px: 3 }}
+                        />
+                    </Box>
+                </Fade>
+            ) : (
+                <>
+                    {/* Main Recording Section */}
+                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                            <Mic color="primary" sx={{ fontSize: 32 }} />
+                            <Typography variant="h5" fontWeight={600}>
+                                Audio Recording
+                            </Typography>
+                        </Box>
+
+                        {/* Recording Button */}
+                        <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <RecordingButton
+                                isRecording={isRecording}
+                                onClick={isRecording ? stopRecording : startRecording}
+                                disabled={isConnecting || meetingEnded || isUploading}
+                                variant="contained"
+                            >
+                                {isConnecting ? (
+                                    <CircularProgress size={32} sx={{ color: 'white' }} />
+                                ) : isRecording ? (
+                                    <Stop sx={{ fontSize: 32 }} />
+                                ) : (
+                                    <Mic sx={{ fontSize: 32 }} />
+                                )}
+                            </RecordingButton>
+                            
+                            {/* Recording pulse animation */}
+                            {isRecording && (
+                                <Box
+                                    sx={{
+                                        position: 'absolute',
+                                        width: 140,
+                                        height: 140,
+                                        borderRadius: '50%',
+                                        border: '2px solid rgba(239, 68, 68, 0.3)',
+                                        animation: 'pulse 2s infinite',
+                                        pointerEvents: 'none', // This prevents the animation from blocking clicks
+                                        '@keyframes pulse': {
+                                            '0%': {
+                                                transform: 'scale(1)',
+                                                opacity: 1,
+                                            },
+                                            '100%': {
+                                                transform: 'scale(1.2)',
+                                                opacity: 0,
+                                            },
+                                        },
+                                    }}
+                                />
+                            )}
+                        </Box>
+
+                        {/* Status Text */}
+                        <Typography 
+                            variant="h6" 
+                            color={isRecording ? 'error.main' : meetingEnded ? 'success.main' : 'text.secondary'}
+                            fontWeight={500}
+                        >
+                            {isConnecting ? 'Connecting to server...' : 
+                             isRecording ? 'Recording in progress' : 
+                             meetingEnded ? 'Meeting ended' :
+                             'Ready to record'}
+                        </Typography>
+
+                        {/* Status Chips */}
+                        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center' }}>
+                            <Chip
+                                icon={isRecording ? <Mic /> : <MicOff />}
+                                label={isRecording ? 'Live' : 'Stopped'}
+                                color={isRecording ? 'error' : 'default'}
+                                variant={isRecording ? 'filled' : 'outlined'}
+                            />
+                            {isConnecting && (
+                                <Chip
+                                    icon={<CircularProgress size={16} />}
+                                    label="Connecting"
+                                    color="warning"
+                                    variant="outlined"
+                                />
+                            )}
+                            {meetingEnded && (
+                                <Chip
+                                    icon={<CheckCircle />}
+                                    label="Meeting Ended"
+                                    color="success"
+                                    variant="filled"
+                                />
+                            )}
+                            {isSummarizing && (
+                                <Chip
+                                    icon={<CircularProgress size={16} />}
+                                    label="Generating Summary"
+                                    color="info"
+                                    variant="outlined"
+                                />
+                            )}
+                            {isRefiningspeakers && (
+                                <Chip
+                                    icon={<CircularProgress size={16} />}
+                                    label={speakerRefinementProgress || "Refining Speakers"}
+                                    color="info"
+                                    variant="outlined"
+                                    sx={{ maxWidth: 350 }}
+                                />
+                            )}
+                        </Box>
+                    </Box>
+
+                    {/* File Upload Section */}
+                    <Divider sx={{ my: 2 }}>
+                        <Typography variant="body2" color="text.secondary">
+                            OR
+                        </Typography>
+                    </Divider>
+
+                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                            <AudioFile color="primary" sx={{ fontSize: 32 }} />
+                            <Typography variant="h6" fontWeight={600}>
+                                Upload Audio File
+                            </Typography>
+                        </Box>
+
+                        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, width: '100%', maxWidth: 400 }}>
+                            {/* File Input */}
+                            <input
+                                id="audio-file-input"
+                                type="file"
+                                accept="audio/*"
+                                onChange={handleFileSelect}
+                                style={{ display: 'none' }}
+                            />
+                            
+                            <Box sx={{ display: 'flex', gap: 2, width: '100%' }}>
+                                <Button
+                                    variant="outlined"
+                                    component="label"
+                                    htmlFor="audio-file-input"
+                                    startIcon={<Upload />}
+                                    disabled={isUploading || isRecording || meetingEnded}
+                                    sx={{ flex: 1 }}
+                                >
+                                    Choose Audio File
+                                </Button>
+                                
+                                {selectedFile && (
+                                    <Button
+                                        variant="contained"
+                                        onClick={uploadAudioFile}
+                                        disabled={isUploading || isRecording || meetingEnded}
+                                        startIcon={isUploading ? <CircularProgress size={16} /> : <Upload />}
+                                        sx={{ flex: 1 }}
+                                    >
+                                        {isUploading ? 'Uploading...' : 'Upload Audio'}
+                                    </Button>
+                                )}
+                            </Box>
+
+                            {/* Selected File Info */}
+                            {selectedFile && (
+                                <Fade in={true}>
+                                    <Card sx={{ width: '100%', bgcolor: 'grey.50' }}>
+                                        <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                                            <Typography variant="body2" color="text.secondary" gutterBottom>
+                                                Selected File:
+                                            </Typography>
+                                            <Typography variant="body1" fontWeight={500}>
+                                                {selectedFile.name}
+                                            </Typography>
+                                            <Typography variant="caption" color="text.secondary">
+                                                Size: {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB
+                                            </Typography>
+                                        </CardContent>
+                                    </Card>
+                                </Fade>
+                            )}
+
+                            {/* Upload Progress */}
+                            {isUploading && (
+                                <Fade in={true}>
+                                    <Box sx={{ width: '100%' }}>
+                                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                                            <Typography variant="body2" color="text.secondary">
+                                                Uploading...
+                                            </Typography>
+                                            <Typography variant="body2" color="text.secondary">
+                                                {uploadProgress}%
+                                            </Typography>
+                                        </Box>
+                                        <LinearProgress 
+                                            variant="determinate" 
+                                            value={uploadProgress} 
+                                            sx={{ borderRadius: 1, height: 8 }}
+                                        />
+                                    </Box>
+                                </Fade>
+                            )}
+
+                            {/* Upload Status Chips */}
+                            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center' }}>
+                                {isUploading && (
+                                    <Chip
+                                        icon={<CircularProgress size={16} />}
+                                        label="Processing Upload"
+                                        color="info"
+                                        variant="outlined"
+                                    />
+                                )}
+                                {selectedFile && !isUploading && (
+                                    <Chip
+                                        icon={<AudioFile />}
+                                        label="File Ready"
+                                        color="success"
+                                        variant="outlined"
                                     />
                                 )}
                             </Box>
-                            
-                            {loadingStoredSummaries && (
-                                <Alert severity="info" sx={{ mb: 2 }}>
-                                    Loading previous summaries...
+                        </Box>
+                    </Box>
+
+                    {/* Meeting Ended Button - Moved here after Upload section */}
+                    {!isRecording && !meetingEnded && (
+                        <Fade in={true}>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                                {/* Helpful note */}
+                                <Alert 
+                                    severity="info" 
+                                    sx={{ 
+                                        borderRadius: 2,
+                                        maxWidth: 600,
+                                        '& .MuiAlert-message': {
+                                            textAlign: 'center'
+                                        }
+                                    }}
+                                >
+                                    <Typography variant="body2">
+                                        <strong>Ready to end the meeting?</strong><br />
+                                        Make sure you've recorded audio or uploaded audio files first. 
+                                        The system will then transcribe uploaded files, perform speaker diarization, and generate a summary with meeting notes and action items.
+                                    </Typography>
                                 </Alert>
-                            )}
-                            
-                            {/* Stored Summaries */}
-                            {storedSummaries.length > 0 && (
-                                <Box sx={{ mb: summary ? 3 : 0 }}>
-                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                                        <History color="primary" fontSize="small" />
-                                        <Typography variant="subtitle2" color="primary" fontWeight={600}>
-                                            Previous Summaries ({storedSummaries.length})
-                                        </Typography>
-                                    </Box>
-                                    {storedSummaries.map((storedSummary, index) => (
-                                        <Box 
-                                            key={storedSummary.id}
-                                            sx={{ 
-                                                p: 2, 
-                                                borderRadius: 2, 
-                                                backgroundColor: 'rgba(99, 102, 241, 0.05)',
-                                                border: '1px solid',
-                                                borderColor: 'rgba(99, 102, 241, 0.2)',
-                                                mb: index < storedSummaries.length - 1 ? 2 : 0,
-                                            }}
-                                        >
-                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
-                                                <Chip
-                                                    label="Previous"
-                                                    size="small"
-                                                    color="secondary"
-                                                    variant="filled"
-                                                />
-                                                <Typography variant="caption" color="text.secondary">
-                                                    {new Date(storedSummary.generated_at).toLocaleString()}
-                                                </Typography>
-                                            </Box>
-                                            <Typography variant="body1" sx={{ lineHeight: 1.6 }}>
-                                                {storedSummary.content}
-                                            </Typography>
-                                        </Box>
-                                    ))}
-                                </Box>
-                            )}
-                            
-                            {/* Current Summary */}
-                            {summary && (
-                                <Box>
-                                    {storedSummaries.length > 0 && (
-                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                                            <Summarize color="success" fontSize="small" />
-                                            <Typography variant="subtitle2" color="success.main" fontWeight={600}>
-                                                Latest Summary
-                                            </Typography>
-                                        </Box>
-                                    )}
-                                    <Box 
-                                        sx={{ 
-                                            p: 2, 
-                                            borderRadius: 2, 
-                                            backgroundColor: storedSummaries.length > 0 ? 'rgba(76, 175, 80, 0.05)' : 'transparent',
-                                            border: storedSummaries.length > 0 ? '1px solid' : 'none',
-                                            borderColor: storedSummaries.length > 0 ? 'rgba(76, 175, 80, 0.2)' : 'transparent',
-                                        }}
-                                    >
-                                        {storedSummaries.length > 0 && (
-                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
-                                                <Chip
-                                                    label="Latest"
-                                                    size="small"
-                                                    color="success"
-                                                    variant="filled"
-                                                />
-                                                <Typography variant="caption" color="text.secondary">
-                                                    Just generated
-                                                </Typography>
-                                            </Box>
-                                        )}
-                                        <Typography variant="body1" sx={{ lineHeight: 1.6 }}>
-                                            {summary}
-                                        </Typography>
-                                    </Box>
-                                </Box>
-                            )}
-                            
-                            {!loadingStoredSummaries && storedSummaries.length === 0 && !summary && (
-                                <Box sx={{ textAlign: 'center', py: 4 }}>
-                                    <Summarize sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
-                                    <Typography variant="body1" color="text.secondary">
-                                        No summaries available yet
-                                    </Typography>
-                                    <Typography variant="body2" color="text.secondary">
-                                        Stop recording to generate a summary
-                                    </Typography>
-                                </Box>
-                            )}
-                        </CardContent>
-                    </StatusCard>
-                </Fade>
+                                
+                                <Button
+                                    variant="contained"
+                                    size="large"
+                                    onClick={handleMeetingEnded}
+                                    disabled={isSummarizing}
+                                    startIcon={isSummarizing ? <CircularProgress size={20} /> : <EventAvailable />}
+                                    sx={{
+                                        background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                        color: 'white',
+                                        px: 4,
+                                        py: 1.5,
+                                        fontSize: '1.1rem',
+                                        fontWeight: 600,
+                                        boxShadow: '0 4px 14px 0 rgba(16, 185, 129, 0.3)',
+                                        '&:hover': {
+                                            background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                                            boxShadow: '0 6px 20px 0 rgba(16, 185, 129, 0.4)',
+                                        },
+                                        '&:disabled': {
+                                            background: 'linear-gradient(135deg, #94a3b8 0%, #64748b 100%)',
+                                            boxShadow: 'none',
+                                        },
+                                    }}
+                                >
+                                    {isSummarizing ? 'Processing Meeting...' : 'End Meeting & Generate Summary'}
+                                </Button>
+                            </Box>
+                        </Fade>
+                    )}
+                </>
             )}
 
             {/* Download Section */}
