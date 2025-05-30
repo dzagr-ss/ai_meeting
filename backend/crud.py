@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 import jwt
 from passlib.context import CryptContext
 import openai
@@ -100,12 +100,86 @@ def create_access_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, config.settings.SECRET_KEY, algorithm=config.settings.ALGORITHM)
     return encoded_jwt
 
+# Tag operations
+def create_tag(db: Session, tag: schemas.TagCreate):
+    # Check if tag already exists (case-insensitive)
+    existing_tag = db.query(models.Tag).filter(
+        models.Tag.name == tag.name.lower()
+    ).first()
+    
+    if existing_tag:
+        return existing_tag
+    
+    db_tag = models.Tag(**tag.dict())
+    db.add(db_tag)
+    db.commit()
+    db.refresh(db_tag)
+    return db_tag
+
+def get_tag(db: Session, tag_id: int):
+    return db.query(models.Tag).filter(models.Tag.id == tag_id).first()
+
+def get_tag_by_name(db: Session, name: str):
+    return db.query(models.Tag).filter(models.Tag.name == name.lower()).first()
+
+def get_tags(db: Session, skip: int = 0, limit: int = 100):
+    return db.query(models.Tag).offset(skip).limit(limit).all()
+
+def update_tag(db: Session, tag_id: int, tag_update: schemas.TagUpdate):
+    db_tag = db.query(models.Tag).filter(models.Tag.id == tag_id).first()
+    
+    if not db_tag:
+        return None
+    
+    update_data = tag_update.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_tag, field, value)
+    
+    db.commit()
+    db.refresh(db_tag)
+    return db_tag
+
+def delete_tag(db: Session, tag_id: int):
+    db_tag = db.query(models.Tag).filter(models.Tag.id == tag_id).first()
+    
+    if not db_tag:
+        return False
+    
+    db.delete(db_tag)
+    db.commit()
+    return True
+
+def create_tags_from_names(db: Session, tag_names: List[str]) -> List[models.Tag]:
+    """Create or get existing tags from a list of tag names"""
+    tags = []
+    for name in tag_names:
+        if name.strip():
+            tag = get_tag_by_name(db, name.strip())
+            if not tag:
+                tag_create = schemas.TagCreate(name=name.strip())
+                tag = create_tag(db, tag_create)
+            tags.append(tag)
+    return tags
+
 # Meeting operations
 def create_meeting(db: Session, meeting: schemas.MeetingCreate, user_id: int):
-    db_meeting = models.Meeting(**meeting.dict(), owner_id=user_id)
+    # Extract tag_ids from meeting data
+    tag_ids = meeting.tag_ids if hasattr(meeting, 'tag_ids') else []
+    meeting_data = meeting.dict()
+    meeting_data.pop('tag_ids', None)  # Remove tag_ids from meeting data
+    
+    db_meeting = models.Meeting(**meeting_data, owner_id=user_id)
     db.add(db_meeting)
     db.commit()
     db.refresh(db_meeting)
+    
+    # Add tags to the meeting
+    if tag_ids:
+        tags = db.query(models.Tag).filter(models.Tag.id.in_(tag_ids)).all()
+        db_meeting.tags.extend(tags)
+        db.commit()
+        db.refresh(db_meeting)
+    
     return db_meeting
 
 def get_meetings(db: Session, skip: int = 0, limit: int = 100, user_id: int = None):
@@ -126,10 +200,45 @@ def update_meeting(db: Session, meeting_id: int, meeting_update: schemas.Meeting
     if not db_meeting:
         return None
     
-    # Update only the fields that are provided
+    # Handle tag updates
     update_data = meeting_update.dict(exclude_unset=True)
+    tag_ids = update_data.pop('tag_ids', None)
+    
+    # Update only the fields that are provided
     for field, value in update_data.items():
         setattr(db_meeting, field, value)
+    
+    # Update tags if provided
+    if tag_ids is not None:
+        # Clear existing tags
+        db_meeting.tags.clear()
+        # Add new tags
+        if tag_ids:
+            tags = db.query(models.Tag).filter(models.Tag.id.in_(tag_ids)).all()
+            db_meeting.tags.extend(tags)
+    
+    db.commit()
+    db.refresh(db_meeting)
+    return db_meeting
+
+def add_tags_to_meeting(db: Session, meeting_id: int, tag_names: List[str], user_id: int):
+    """Add tags to a meeting by tag names, creating tags if they don't exist"""
+    db_meeting = db.query(models.Meeting).filter(
+        models.Meeting.id == meeting_id,
+        models.Meeting.owner_id == user_id
+    ).first()
+    
+    if not db_meeting:
+        return None
+    
+    # Create or get existing tags
+    tags = create_tags_from_names(db, tag_names)
+    
+    # Add tags to meeting (avoid duplicates)
+    existing_tag_ids = {tag.id for tag in db_meeting.tags}
+    for tag in tags:
+        if tag.id not in existing_tag_ids:
+            db_meeting.tags.append(tag)
     
     db.commit()
     db.refresh(db_meeting)

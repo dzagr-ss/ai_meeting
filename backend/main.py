@@ -1809,6 +1809,13 @@ async def get_meeting_summary(
         chatgpt_action_items = await generate_action_items_with_chatgpt(meeting_id, db)
         structured_content["action_items"] = chatgpt_action_items
         
+        # Generate tags with ChatGPT
+        generated_tags = await generate_tags_with_chatgpt(meeting_id, db)
+        if generated_tags:
+            # Add tags to the meeting
+            crud.add_tags_to_meeting(db, meeting_id, generated_tags, current_user.id)
+            print(f"[Summary] Generated and added tags: {generated_tags}")
+        
         # Save the summary to database as JSON
         summary_create = schemas.SummaryCreate(
             meeting_id=meeting_id,
@@ -2952,6 +2959,191 @@ async def permission_error_handler(request: Request, exc: PermissionError):
             "detail": "You don't have permission to access this resource"
         }
     )
+
+# Tag endpoints
+@app.post("/tags/", response_model=schemas.Tag)
+@limiter.limit("30/minute")  # Tag creation
+def create_tag(
+    request: Request,
+    tag: schemas.TagCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    return crud.create_tag(db=db, tag=tag)
+
+@app.get("/tags/", response_model=List[schemas.Tag])
+@limiter.limit("60/minute")  # Read operations
+def get_tags(
+    request: Request,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    return crud.get_tags(db=db, skip=skip, limit=limit)
+
+@app.get("/tags/{tag_id}", response_model=schemas.Tag)
+@limiter.limit("60/minute")  # Read operations
+def get_tag(
+    request: Request,
+    tag_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    tag = crud.get_tag(db=db, tag_id=tag_id)
+    if not tag:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tag not found"
+        )
+    return tag
+
+@app.put("/tags/{tag_id}", response_model=schemas.Tag)
+@limiter.limit("30/minute")  # Update operations
+def update_tag(
+    request: Request,
+    tag_id: int,
+    tag_update: schemas.TagUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    tag = crud.update_tag(db=db, tag_id=tag_id, tag_update=tag_update)
+    if not tag:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tag not found"
+        )
+    return tag
+
+@app.delete("/tags/{tag_id}")
+@limiter.limit("30/minute")  # Delete operations
+def delete_tag(
+    request: Request,
+    tag_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    success = crud.delete_tag(db=db, tag_id=tag_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tag not found"
+        )
+    return {"message": "Tag deleted successfully"}
+
+@app.post("/meetings/{meeting_id}/tags")
+@limiter.limit("30/minute")  # Tag operations
+def add_tags_to_meeting(
+    request: Request,
+    meeting_id: int,
+    tag_names: List[str],
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    meeting = crud.add_tags_to_meeting(
+        db=db, 
+        meeting_id=meeting_id, 
+        tag_names=tag_names, 
+        user_id=current_user.id
+    )
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found"
+        )
+    return {"message": "Tags added successfully", "tags": [tag.name for tag in meeting.tags]}
+
+async def generate_tags_with_chatgpt(meeting_id: int, db: Session) -> List[str]:
+    """
+    Generate 2-5 relevant tags for a meeting using ChatGPT based on meeting transcriptions and summary.
+    """
+    try:
+        # Check if OpenAI API key is available
+        if not settings.OPENAI_API_KEY:
+            return []
+        
+        # Get all transcriptions for the meeting
+        transcriptions = db.query(models.Transcription).filter(
+            models.Transcription.meeting_id == meeting_id
+        ).order_by(models.Transcription.timestamp).all()
+        
+        # Get the latest summary if available
+        latest_summary = crud.get_latest_meeting_summary(db, meeting_id)
+        
+        if not transcriptions and not latest_summary:
+            return []
+        
+        # Combine transcription text and summary for context
+        context_text = ""
+        
+        if transcriptions:
+            for transcription in transcriptions:
+                speaker = transcription.speaker or "Unknown"
+                text = transcription.text or ""
+                context_text += f"{speaker}: {text}\n"
+        
+        if latest_summary:
+            try:
+                # Try to parse as JSON to get summary content
+                parsed_content = json.loads(latest_summary.content)
+                if isinstance(parsed_content, dict) and "summary" in parsed_content:
+                    context_text += f"\nSummary: {parsed_content['summary']}"
+                else:
+                    context_text += f"\nSummary: {latest_summary.content}"
+            except (json.JSONDecodeError, TypeError):
+                context_text += f"\nSummary: {latest_summary.content}"
+        
+        if not context_text.strip():
+            return []
+        
+        # Initialize OpenAI client
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        
+        # Prompt for tag generation
+        prompt = """I will give you meeting content (transcriptions and summary). Please analyze it and generate 2-5 relevant tags that best categorize this meeting.
+
+The tags should be:
+- Short (1-3 words each)
+- Descriptive of the main topics, themes, or purpose
+- Useful for organizing and filtering meetings
+- Professional and clear
+
+Return only the tags as a comma-separated list, nothing else.
+
+Examples of good tags: "project planning", "budget review", "team sync", "client meeting", "strategy", "quarterly review", "product launch", "technical discussion"
+
+Here is the meeting content:"""
+        
+        # Call ChatGPT
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are an expert at categorizing and tagging meeting content. You generate concise, relevant tags that help organize meetings effectively."
+                },
+                {
+                    "role": "user", 
+                    "content": f"{prompt}\n\n{context_text}"
+                }
+            ],
+            max_tokens=100,
+            temperature=0.3
+        )
+        
+        tags_text = response.choices[0].message.content.strip()
+        
+        # Parse the comma-separated tags
+        if tags_text:
+            tags = [tag.strip().lower() for tag in tags_text.split(',') if tag.strip()]
+            # Limit to 5 tags maximum
+            return tags[:5]
+        
+        return []
+        
+    except Exception as e:
+        print(f"Error generating tags with ChatGPT: {e}")
+        return []
 
 if __name__ == "__main__":
     # Load environment variables from .env file

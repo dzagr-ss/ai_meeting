@@ -1,7 +1,15 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime, Text
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime, Text, Table
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
+
+# Association table for many-to-many relationship between meetings and tags
+meeting_tags = Table(
+    'meeting_tags',
+    Base.metadata,
+    Column('meeting_id', Integer, ForeignKey('meetings.id'), primary_key=True),
+    Column('tag_id', Integer, ForeignKey('tags.id'), primary_key=True)
+)
 
 class User(Base):
     __tablename__ = "users"
@@ -13,6 +21,17 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     meetings = relationship("Meeting", back_populates="owner")
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+    color = Column(String, default="#6366f1")  # Default color for tags
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Many-to-many relationship with meetings
+    meetings = relationship("Meeting", secondary=meeting_tags, back_populates="tags")
 
 class PasswordResetToken(Base):
     __tablename__ = "password_reset_tokens"
@@ -41,6 +60,9 @@ class Meeting(Base):
     action_items = relationship("ActionItem", back_populates="meeting")
     summaries = relationship("Summary", back_populates="meeting")
     meeting_notes = relationship("MeetingNotes", back_populates="meeting")
+    
+    # Many-to-many relationship with tags
+    tags = relationship("Tag", secondary=meeting_tags, back_populates="meetings")
 
 class Transcription(Base):
     __tablename__ = "transcriptions"
