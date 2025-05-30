@@ -1,0 +1,20 @@
+{
+  "name": "stocks-agent",
+  "version": "1.0.0",
+  "description": "AI-powered meeting transcription and analysis system",
+  "scripts": {
+    "start": "cd frontend && npm start",
+    "start:frontend": "cd frontend && npm start",
+    "start:backend": "cd backend && python main.py",
+    "install:frontend": "cd frontend && npm install",
+    "build:frontend": "cd frontend && npm run build"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.1",
+    "marked": "^15.0.12"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.5",
+    "@types/react-dom": "^19.1.5"
+  }
+}
