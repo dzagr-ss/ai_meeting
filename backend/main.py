@@ -1838,6 +1838,23 @@ async def get_meeting_summary(
         crud.mark_meeting_as_ended(db, meeting_id, current_user.id)
         print(f"[Summary] Meeting {meeting_id} marked as ended")
         
+        # Clean up audio files after successful summarization (if enabled)
+        if settings.AUTO_CLEANUP_AUDIO_FILES:
+            try:
+                cleanup_stats = cleanup_meeting_audio_files(meeting_id, current_user.email)
+                print(f"[Summary] Audio cleanup completed: {cleanup_stats}")
+                
+                # Add cleanup info to the response for debugging/monitoring
+                structured_content["cleanup_stats"] = cleanup_stats
+                
+            except Exception as cleanup_error:
+                print(f"[Summary] Audio cleanup failed (non-critical): {cleanup_error}")
+                # Don't fail the entire summarization if cleanup fails
+                structured_content["cleanup_stats"] = {"error": str(cleanup_error)}
+        else:
+            print(f"[Summary] Audio cleanup disabled by configuration")
+            structured_content["cleanup_stats"] = {"disabled": True}
+        
         return structured_content
     except Exception as e:
         return JSONResponse({
@@ -3053,6 +3070,137 @@ def add_tags_to_meeting(
         )
     return {"message": "Tags added successfully", "tags": [tag.name for tag in meeting.tags]}
 
+@app.post("/meetings/{meeting_id}/cleanup-audio")
+@limiter.limit("10/minute")  # Cleanup operations
+def cleanup_meeting_audio_endpoint(
+    request: Request,
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Manually clean up audio files for a meeting.
+    This endpoint allows users to free up storage space by deleting audio files
+    after the meeting has been summarized.
+    """
+    # Verify the meeting exists and belongs to the current user
+    meeting = db.query(models.Meeting).filter(
+        models.Meeting.id == meeting_id,
+        models.Meeting.owner_id == current_user.id
+    ).first()
+    
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found"
+        )
+    
+    # Check if meeting has been summarized (has summary or is ended)
+    has_summary = crud.get_latest_meeting_summary(db, meeting_id) is not None
+    is_ended = meeting.is_ended
+    
+    if not has_summary and not is_ended:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot cleanup audio files for a meeting that hasn't been summarized or ended"
+        )
+    
+    try:
+        cleanup_stats = cleanup_meeting_audio_files(meeting_id, current_user.email)
+        
+        # Log the cleanup action
+        log_audit_event("audio_cleanup", current_user.id, "meeting", meeting_id, {
+            "cleanup_stats": cleanup_stats
+        })
+        
+        return {
+            "message": "Audio files cleaned up successfully",
+            "meeting_id": meeting_id,
+            "cleanup_stats": cleanup_stats
+        }
+        
+    except Exception as e:
+        print(f"Error during manual audio cleanup for meeting {meeting_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to cleanup audio files: {str(e)}"
+        )
+
+@app.get("/user/storage-usage")
+@limiter.limit("30/minute")  # Storage info
+def get_user_storage_usage(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Get storage usage information for the current user.
+    Shows total storage used by audio files across all meetings.
+    """
+    try:
+        safe_email = get_safe_email_for_path(current_user.email)
+        user_meetings_dir = f"/tmp/meetings/{safe_email}"
+        
+        total_size = 0
+        total_files = 0
+        meetings_with_audio = 0
+        meeting_details = []
+        
+        # Get all user meetings
+        user_meetings = db.query(models.Meeting).filter(
+            models.Meeting.owner_id == current_user.id
+        ).all()
+        
+        for meeting in user_meetings:
+            meeting_audio_files = get_meeting_audio_files(meeting.id, current_user.email)
+            
+            if meeting_audio_files:
+                meetings_with_audio += 1
+                meeting_size = 0
+                
+                for audio_file in meeting_audio_files:
+                    try:
+                        file_size = os.path.getsize(audio_file)
+                        meeting_size += file_size
+                        total_files += 1
+                    except Exception as e:
+                        print(f"Error getting size for {audio_file}: {e}")
+                
+                total_size += meeting_size
+                
+                # Check if meeting has been summarized
+                has_summary = crud.get_latest_meeting_summary(db, meeting.id) is not None
+                
+                meeting_details.append({
+                    "meeting_id": meeting.id,
+                    "meeting_title": meeting.title,
+                    "audio_files_count": len(meeting_audio_files),
+                    "total_size_bytes": meeting_size,
+                    "total_size_mb": round(meeting_size / (1024 * 1024), 2),
+                    "has_summary": has_summary,
+                    "is_ended": meeting.is_ended,
+                    "can_cleanup": has_summary or meeting.is_ended
+                })
+        
+        return {
+            "user_email": current_user.email,
+            "total_storage_bytes": total_size,
+            "total_storage_mb": round(total_size / (1024 * 1024), 2),
+            "total_storage_gb": round(total_size / (1024 * 1024 * 1024), 3),
+            "total_files": total_files,
+            "total_meetings": len(user_meetings),
+            "meetings_with_audio": meetings_with_audio,
+            "auto_cleanup_enabled": settings.AUTO_CLEANUP_AUDIO_FILES,
+            "meeting_details": meeting_details
+        }
+        
+    except Exception as e:
+        print(f"Error getting storage usage for user {current_user.email}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get storage usage: {str(e)}"
+        )
+
 async def generate_tags_with_chatgpt(meeting_id: int, db: Session) -> List[str]:
     """
     Generate 2-5 relevant tags for a meeting using ChatGPT based on meeting transcriptions and summary.
@@ -3144,6 +3292,91 @@ Here is the meeting content:"""
     except Exception as e:
         print(f"Error generating tags with ChatGPT: {e}")
         return []
+
+def cleanup_meeting_audio_files(meeting_id: int, user_email: str) -> dict:
+    """
+    Clean up all audio files related to a meeting after successful summarization.
+    Returns a dictionary with cleanup statistics.
+    """
+    try:
+        print(f"[AudioCleanup] Starting cleanup for meeting {meeting_id}")
+        
+        # Get all audio files for this meeting
+        audio_files = get_meeting_audio_files(meeting_id, user_email)
+        
+        if not audio_files:
+            print(f"[AudioCleanup] No audio files found for meeting {meeting_id}")
+            return {
+                "files_deleted": 0,
+                "files_failed": 0,
+                "total_size_freed": 0,
+                "directories_cleaned": 0
+            }
+        
+        deleted_count = 0
+        failed_count = 0
+        total_size_freed = 0
+        directories_to_check = set()
+        
+        # Delete each audio file
+        for audio_file in audio_files:
+            try:
+                # Get file size before deletion
+                file_size = os.path.getsize(audio_file)
+                
+                # Delete the file
+                os.remove(audio_file)
+                deleted_count += 1
+                total_size_freed += file_size
+                
+                # Track directory for cleanup
+                directories_to_check.add(os.path.dirname(audio_file))
+                
+                print(f"[AudioCleanup] Deleted: {audio_file} ({file_size} bytes)")
+                
+            except Exception as e:
+                failed_count += 1
+                print(f"[AudioCleanup] Failed to delete {audio_file}: {e}")
+        
+        # Clean up empty directories
+        directories_cleaned = 0
+        for directory in directories_to_check:
+            try:
+                # Check if directory is empty
+                if os.path.exists(directory) and not os.listdir(directory):
+                    os.rmdir(directory)
+                    directories_cleaned += 1
+                    print(f"[AudioCleanup] Removed empty directory: {directory}")
+                    
+                    # Also try to remove parent directory if it's empty
+                    parent_dir = os.path.dirname(directory)
+                    if os.path.exists(parent_dir) and not os.listdir(parent_dir):
+                        os.rmdir(parent_dir)
+                        directories_cleaned += 1
+                        print(f"[AudioCleanup] Removed empty parent directory: {parent_dir}")
+                        
+            except Exception as e:
+                print(f"[AudioCleanup] Failed to remove directory {directory}: {e}")
+        
+        cleanup_stats = {
+            "files_deleted": deleted_count,
+            "files_failed": failed_count,
+            "total_size_freed": total_size_freed,
+            "directories_cleaned": directories_cleaned
+        }
+        
+        print(f"[AudioCleanup] Cleanup completed for meeting {meeting_id}: {cleanup_stats}")
+        return cleanup_stats
+        
+    except Exception as e:
+        print(f"[AudioCleanup] Error during cleanup for meeting {meeting_id}: {e}")
+        return {
+            "files_deleted": 0,
+            "files_failed": 0,
+            "total_size_freed": 0,
+            "directories_cleaned": 0,
+            "error": str(e)
+        }
 
 if __name__ == "__main__":
     # Load environment variables from .env file
