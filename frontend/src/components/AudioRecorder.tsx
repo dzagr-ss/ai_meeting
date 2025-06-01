@@ -26,6 +26,7 @@ import {
 } from '@mui/icons-material';
 import { useAppSelector } from '../store/hooks';
 import { fetchWithAuth } from '../utils/api';
+import AudioVisualizer from './AudioVisualizer';
 
 // Define a constant for the desired audio sample rate
 const TARGET_SAMPLE_RATE = 16000;
@@ -148,10 +149,13 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
     const [isSummarizing, setIsSummarizing] = useState(false);
     const [meetingEnded, setMeetingEnded] = useState(false);
     const [isMeetingEndedInDatabase, setIsMeetingEndedInDatabase] = useState(false);
+    const [audioLevel, setAudioLevel] = useState(0); // Audio level for visualization (0-100)
     const audioContextRef = useRef<AudioContext | null>(null);
     const websocketRef = useRef<WebSocket | null>(null);
     const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
     const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
+    const analyserRef = useRef<AnalyserNode | null>(null);
+    const animationFrameRef = useRef<number>();
     const token = useAppSelector(state => state.auth.token);
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
@@ -332,6 +336,72 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
         }
     }, [meetingId, token]);
 
+    // Audio level detection function
+    const detectAudioLevel = useCallback(() => {
+        if (!analyserRef.current || !isRecording) {
+            console.log('[AudioLevel] Analyser not available or not recording');
+            return;
+        }
+
+        const analyser = analyserRef.current;
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+
+        console.log('[AudioLevel] Starting audio level detection with buffer length:', bufferLength);
+
+        const updateLevel = () => {
+            if (!isRecording || !analyserRef.current) {
+                console.log('[AudioLevel] Stopping audio level detection');
+                setAudioLevel(0);
+                return;
+            }
+
+            // Get frequency data
+            analyser.getByteFrequencyData(dataArray);
+            
+            // Calculate average amplitude across all frequencies
+            let sum = 0;
+            for (let i = 0; i < bufferLength; i++) {
+                sum += dataArray[i];
+            }
+            const average = sum / bufferLength;
+            
+            // Convert to percentage (0-100) with better sensitivity
+            const level = Math.min(100, (average / 255) * 100 * 3); // 3x amplification for better visibility
+            
+            // Log occasionally for debugging
+            if (Math.random() < 0.01) { // Log ~1% of the time
+                console.log('[AudioLevel] Raw average:', average, 'Calculated level:', level);
+            }
+            
+            setAudioLevel(level);
+
+            animationFrameRef.current = requestAnimationFrame(updateLevel);
+        };
+
+        updateLevel();
+    }, [isRecording]);
+
+    // Start audio level detection when recording starts
+    useEffect(() => {
+        if (isRecording && analyserRef.current) {
+            console.log('[AudioLevel] Starting detection due to recording state change');
+            detectAudioLevel();
+        } else if (!isRecording && animationFrameRef.current) {
+            console.log('[AudioLevel] Stopping detection due to recording state change');
+            cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = undefined;
+            setAudioLevel(0);
+        }
+
+        return () => {
+            if (animationFrameRef.current) {
+                cancelAnimationFrame(animationFrameRef.current);
+                animationFrameRef.current = undefined;
+            }
+        };
+    }, [isRecording, detectAudioLevel]);
+
     const connectWebSocket = async () => {
         if (!token) {
             setError('Authentication token not found');
@@ -485,6 +555,17 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
             // Create MediaStreamAudioSourceNode
             audioSourceRef.current = audioContext.createMediaStreamSource(stream);
             console.log('Created MediaStreamAudioSourceNode');
+
+            // Create AnalyserNode for audio level detection
+            analyserRef.current = audioContext.createAnalyser();
+            analyserRef.current.fftSize = 512; // Smaller FFT for faster updates
+            analyserRef.current.smoothingTimeConstant = 0.3; // Less smoothing for more responsive updates
+            analyserRef.current.minDecibels = -90;
+            analyserRef.current.maxDecibels = -10;
+            
+            // Connect source to analyser for level detection
+            audioSourceRef.current.connect(analyserRef.current);
+            console.log('Created and connected AnalyserNode');
 
             // Add an AudioWorklet if possible for better performance and access to raw data
             // Fallback to ScriptProcessorNode if AudioWorklet is not supported or fails
@@ -669,6 +750,14 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
             audioWorkletNodeRef.current.port.onmessage = null; // Remove message handler
             audioWorkletNodeRef.current.disconnect();
             audioWorkletNodeRef.current = null;
+        }
+        if (analyserRef.current) {
+            analyserRef.current.disconnect();
+            analyserRef.current = null;
+        }
+        if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = undefined;
         }
 
         if (websocketRef.current) {
@@ -1295,6 +1384,17 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
                              meetingEnded ? 'Meeting ended' :
                              'Ready to record'}
                         </Typography>
+
+                        {/* Audio Visualizer */}
+                        <AudioVisualizer
+                            isActive={isRecording}
+                            audioLevel={audioLevel}
+                            barCount={24}
+                            height={50}
+                            width={280}
+                            color={isRecording ? '#ef4444' : '#6366f1'}
+                            backgroundColor="rgba(0, 0, 0, 0.02)"
+                        />
 
                         {/* Status Chips */}
                         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center' }}>

@@ -219,6 +219,21 @@ JWT_SECRET=your_jwt_secret
 The application supports integration with:
 - Google Calendar
 
+## Audio Visualizer
+
+The application includes a real-time audio visualizer that displays animated soundbars to show audio input levels. This helps users:
+
+- Confirm their microphone is working properly
+- See audio input levels in real-time
+- Get visual feedback during recording
+- Identify when audio is being captured
+
+The visualizer features:
+- 24 animated sound bars
+- Real-time audio level detection using Web Audio API
+- Smooth animations and transitions
+- Color changes based on recording state (blue when ready, red when recording)
+- Responsive design that works on all screen sizes
 
 ## Contributing
 
