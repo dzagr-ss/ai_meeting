@@ -117,6 +117,43 @@ class PasswordResetConfirm(BaseModel):
             raise ValueError('Password must contain at least one special character')
         return v
 
+# Tag schemas
+class TagBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=50)
+    color: Optional[str] = Field("#6366f1", pattern=r"^#[0-9A-Fa-f]{6}$")
+
+    @validator('name')
+    def validate_name(cls, v):
+        v = sanitize_text(v)
+        v = validate_no_sql_injection(v)
+        if not v.strip():
+            raise ValueError('Tag name cannot be empty')
+        return v.strip().lower()  # Normalize tag names to lowercase
+
+class TagCreate(TagBase):
+    pass
+
+class TagUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=50)
+    color: Optional[str] = Field(None, pattern=r"^#[0-9A-Fa-f]{6}$")
+
+    @validator('name')
+    def validate_name(cls, v):
+        if v is not None:
+            v = sanitize_text(v)
+            v = validate_no_sql_injection(v)
+            if not v.strip():
+                raise ValueError('Tag name cannot be empty')
+            return v.strip().lower()
+        return v
+
+class Tag(TagBase):
+    id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
 # Meeting schemas
 class MeetingBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=MAX_TITLE_LENGTH)
@@ -139,11 +176,12 @@ class MeetingBase(BaseModel):
         return v
 
 class MeetingCreate(MeetingBase):
-    pass
+    tag_ids: Optional[List[int]] = Field(default_factory=list)
 
 class MeetingUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=MAX_TITLE_LENGTH)
     description: Optional[str] = Field(None, max_length=MAX_DESCRIPTION_LENGTH)
+    tag_ids: Optional[List[int]] = None
 
     @validator('title')
     def validate_title(cls, v):
@@ -168,6 +206,7 @@ class Meeting(MeetingBase):
     owner_id: int
     status: str
     is_ended: bool = False
+    tags: List[Tag] = Field(default_factory=list)
 
     class Config:
         from_attributes = True

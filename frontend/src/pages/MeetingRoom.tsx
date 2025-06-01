@@ -33,6 +33,8 @@ import {
   Mic,
   People,
   KeyboardArrowDown,
+  LocalOffer,
+  Edit,
 } from '@mui/icons-material';
 import { useParams } from 'react-router-dom';
 import AudioRecorder from '../components/AudioRecorder';
@@ -40,6 +42,25 @@ import { fetchWithAuth } from '../utils/api';
 import { useAppSelector } from '../store/hooks';
 import ReactMarkdown from 'react-markdown';
 import { getSpeakerColor } from '../utils/speakerColors';
+import TagChip from '../components/TagChip';
+import TagManager from '../components/TagManager';
+
+interface Tag {
+  id: number;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
+interface Meeting {
+  id: number;
+  title: string;
+  description: string | null;
+  start_time: string;
+  end_time: string | null;
+  status: string;
+  tags: Tag[];
+}
 
 interface AudioDevice {
   deviceId: string;
@@ -125,6 +146,9 @@ const decodeHtmlEntities = (text: string): string => {
 const MeetingRoom: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const token = useAppSelector(state => state.auth.token);
+  const [meeting, setMeeting] = useState<Meeting | null>(null);
+  const [loadingMeeting, setLoadingMeeting] = useState(false);
+  const [tagManagerOpen, setTagManagerOpen] = useState(false);
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string>('');
   const [transcriptions, setTranscriptions] = useState<TranscriptionData[]>([]);
@@ -149,6 +173,36 @@ const MeetingRoom: React.FC = () => {
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setActiveTab(newValue);
+  };
+
+  // Load meeting data
+  const loadMeetingData = async () => {
+    if (!id || !token) return;
+    
+    setLoadingMeeting(true);
+    try {
+      const response = await fetchWithAuth(`http://localhost:8000/meetings/`);
+      
+      if (response.ok) {
+        const meetings = await response.json();
+        const currentMeeting = meetings.find((m: Meeting) => m.id === parseInt(id));
+        if (currentMeeting) {
+          setMeeting(currentMeeting);
+        }
+      } else {
+        console.error('Failed to load meeting data:', response.status);
+      }
+    } catch (error) {
+      console.error('Error loading meeting data:', error);
+    } finally {
+      setLoadingMeeting(false);
+    }
+  };
+
+  const handleTagsUpdated = (updatedTags: Tag[]) => {
+    if (meeting) {
+      setMeeting({ ...meeting, tags: updatedTags });
+    }
   };
 
   useEffect(() => {
@@ -194,6 +248,7 @@ const MeetingRoom: React.FC = () => {
 
     getAudioDevices();
     loadStoredTranscriptions();
+    loadMeetingData();
   }, [id, token]);
 
   // Monitor storedTranscriptions changes
@@ -354,7 +409,7 @@ const MeetingRoom: React.FC = () => {
       <Container maxWidth="xl">
         {/* Header */}
         <Box sx={{ mb: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <Box>
+          <Box sx={{ flexGrow: 1, mr: 3 }}>
             <Typography 
               variant="h4" 
               component="h1" 
@@ -367,11 +422,59 @@ const MeetingRoom: React.FC = () => {
                 WebkitTextFillColor: 'transparent',
               }}
             >
-              Meeting Room #{id}
+              {meeting?.title || `Meeting Room #${id}`}
             </Typography>
-            <Typography variant="h6" color="text.secondary">
+            <Typography variant="h6" color="text.secondary" sx={{ mb: 2 }}>
               AI-powered transcription and analysis
             </Typography>
+            
+            {/* Tags Section */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <LocalOffer sx={{ fontSize: 20, color: 'text.secondary' }} />
+                <Typography variant="body2" color="text.secondary" fontWeight={600}>
+                  Tags:
+                </Typography>
+              </Box>
+              
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+                {meeting?.tags && meeting.tags.length > 0 ? (
+                  <>
+                    {meeting.tags.slice(0, 8).map(tag => (
+                      <TagChip key={tag.id} tag={tag} size="small" />
+                    ))}
+                    {meeting.tags.length > 8 && (
+                      <Chip
+                        label={`+${meeting.tags.length - 8} more`}
+                        size="small"
+                        variant="outlined"
+                        sx={{ fontSize: '0.7rem' }}
+                      />
+                    )}
+                  </>
+                ) : (
+                  <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                    No tags
+                  </Typography>
+                )}
+                
+                <IconButton
+                  size="small"
+                  onClick={() => setTagManagerOpen(true)}
+                  sx={{ 
+                    ml: 1,
+                    color: 'primary.main',
+                    '&:hover': {
+                      backgroundColor: 'primary.main',
+                      color: 'white',
+                    },
+                  }}
+                  disabled={!meeting}
+                >
+                  <Edit sx={{ fontSize: 18 }} />
+                </IconButton>
+              </Box>
+            </Box>
           </Box>
           
           {/* Audio Settings Button */}
@@ -1028,6 +1131,17 @@ const MeetingRoom: React.FC = () => {
           </Grid>
         </Grid>
       </Container>
+
+      {/* Tag Manager Dialog */}
+      {meeting && (
+        <TagManager
+          open={tagManagerOpen}
+          onClose={() => setTagManagerOpen(false)}
+          meetingId={meeting.id}
+          currentTags={meeting.tags}
+          onTagsUpdated={handleTagsUpdated}
+        />
+      )}
     </Box>
   );
 };

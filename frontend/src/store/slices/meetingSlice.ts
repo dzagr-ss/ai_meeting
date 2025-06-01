@@ -1,5 +1,12 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
+interface Tag {
+  id: number;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
 interface Meeting {
   id: number;
   title: string;
@@ -7,6 +14,7 @@ interface Meeting {
   start_time: string;
   end_time: string | null;
   status: string;
+  tags: Tag[];
 }
 
 interface MeetingState {
@@ -16,6 +24,7 @@ interface MeetingState {
   error: string | null;
   isRecording: boolean;
   transcription: string;
+  selectedTags: string[];
 }
 
 const initialState: MeetingState = {
@@ -25,6 +34,7 @@ const initialState: MeetingState = {
   error: null,
   isRecording: false,
   transcription: '',
+  selectedTags: [],
 };
 
 const meetingSlice = createSlice({
@@ -70,6 +80,12 @@ const meetingSlice = createSlice({
         state.currentMeeting = null;
       }
     },
+    setSelectedTags: (state, action: PayloadAction<string[]>) => {
+      state.selectedTags = action.payload;
+    },
+    clearSelectedTags: (state) => {
+      state.selectedTags = [];
+    },
   },
 });
 
@@ -83,6 +99,8 @@ export const {
   updateTranscription,
   updateMeetingSuccess,
   deleteMeetingSuccess,
+  setSelectedTags,
+  clearSelectedTags,
 } = meetingSlice.actions;
 
 export default meetingSlice.reducer; 

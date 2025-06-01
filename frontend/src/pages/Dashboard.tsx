@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import {
@@ -16,6 +16,8 @@ import {
   Paper,
   Snackbar,
   Alert,
+  Autocomplete,
+  IconButton,
 } from '@mui/material';
 import {
   Add,
@@ -25,6 +27,10 @@ import {
   TrendingUp,
   Group,
   AccessTime,
+  LocalOffer,
+  Edit,
+  FilterList,
+  Clear,
 } from '@mui/icons-material';
 import {
   fetchMeetingsStart,
@@ -32,17 +38,41 @@ import {
   fetchMeetingsFailure,
   updateMeetingSuccess,
   deleteMeetingSuccess,
+  setSelectedTags,
+  clearSelectedTags,
 } from '../store/slices/meetingSlice';
 import MeetingDropdownMenu from '../components/MeetingDropdownMenu';
+import TagChip from '../components/TagChip';
+import TagManager from '../components/TagManager';
 import api from '../utils/api';
+
+interface Tag {
+  id: number;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
+interface Meeting {
+  id: number;
+  title: string;
+  description: string | null;
+  start_time: string;
+  end_time: string | null;
+  status: string;
+  tags: Tag[];
+}
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
-  const { meetings, loading } = useAppSelector((state) => state.meeting);
+  const { meetings, loading, selectedTags } = useAppSelector((state) => state.meeting);
   const { token } = useAppSelector((state) => state.auth);
-  const [newMeetingTitle, setNewMeetingTitle] = React.useState('');
-  const [snackbar, setSnackbar] = React.useState<{
+  const [newMeetingTitle, setNewMeetingTitle] = useState('');
+  const [availableTags, setAvailableTags] = useState<Tag[]>([]);
+  const [tagManagerOpen, setTagManagerOpen] = useState(false);
+  const [selectedMeetingForTags, setSelectedMeetingForTags] = useState<Meeting | null>(null);
+  const [snackbar, setSnackbar] = useState<{
     open: boolean;
     message: string;
     severity: 'success' | 'error';
@@ -63,7 +93,17 @@ const Dashboard: React.FC = () => {
       }
     };
 
+    const fetchTags = async () => {
+      try {
+        const response = await api.get('/tags/');
+        setAvailableTags(response.data);
+      } catch (err) {
+        console.error('Failed to fetch tags:', err);
+      }
+    };
+
     fetchMeetings();
+    fetchTags();
   }, [dispatch, token]);
 
   const handleCreateMeeting = async () => {
@@ -115,9 +155,41 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const handleManageTags = (meeting: Meeting) => {
+    setSelectedMeetingForTags(meeting);
+    setTagManagerOpen(true);
+  };
+
+  const handleTagsUpdated = (updatedTags: Tag[]) => {
+    if (selectedMeetingForTags) {
+      const updatedMeeting = { ...selectedMeetingForTags, tags: updatedTags };
+      dispatch(updateMeetingSuccess(updatedMeeting));
+      setSnackbar({
+        open: true,
+        message: 'Tags updated successfully',
+        severity: 'success',
+      });
+    }
+  };
+
   const handleCloseSnackbar = () => {
     setSnackbar({ ...snackbar, open: false });
   };
+
+  const handleTagFilterChange = (event: any, value: string[]) => {
+    dispatch(setSelectedTags(value));
+  };
+
+  const clearTagFilter = () => {
+    dispatch(clearSelectedTags());
+  };
+
+  // Filter meetings based on selected tags
+  const filteredMeetings = selectedTags.length > 0 
+    ? meetings.filter(meeting => 
+        meeting.tags.some(tag => selectedTags.includes(tag.name))
+      )
+    : meetings;
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -305,13 +377,61 @@ const Dashboard: React.FC = () => {
           </Paper>
         </Box>
 
+        {/* Tag Filter Section */}
+        <Box sx={{ mb: 4 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+            <FilterList color="primary" />
+            <Typography variant="h6" fontWeight={600}>
+              Filter by Tags
+            </Typography>
+            {selectedTags.length > 0 && (
+              <IconButton onClick={clearTagFilter} size="small">
+                <Clear />
+              </IconButton>
+            )}
+          </Box>
+          <Autocomplete
+            multiple
+            options={availableTags.map(tag => tag.name)}
+            value={selectedTags}
+            onChange={handleTagFilterChange}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                placeholder="Select tags to filter meetings..."
+                variant="outlined"
+                size="small"
+              />
+            )}
+            renderTags={(value, getTagProps) =>
+              value.map((option, index) => {
+                const tag = availableTags.find(t => t.name === option);
+                return tag ? (
+                  <TagChip
+                    tag={tag}
+                    {...getTagProps({ index })}
+                  />
+                ) : (
+                  <Chip label={option} size="small" {...getTagProps({ index })} />
+                );
+              })
+            }
+            sx={{ maxWidth: 600 }}
+          />
+          {selectedTags.length > 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              Showing {filteredMeetings.length} of {meetings.length} meetings
+            </Typography>
+          )}
+        </Box>
+
         {/* Meetings Grid */}
         <Box>
           <Typography variant="h5" fontWeight={600} gutterBottom sx={{ mb: 3 }}>
             Your Meetings
           </Typography>
           
-          {meetings.length === 0 ? (
+          {filteredMeetings.length === 0 ? (
             <Paper
               sx={{
                 p: 6,
@@ -323,15 +443,18 @@ const Dashboard: React.FC = () => {
             >
               <VideoCall sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
               <Typography variant="h6" color="text.secondary" gutterBottom>
-                No meetings yet
+                {selectedTags.length > 0 ? 'No meetings match the selected tags' : 'No meetings yet'}
               </Typography>
               <Typography variant="body1" color="text.secondary">
-                Create your first meeting to get started with AI transcription
+                {selectedTags.length > 0 
+                  ? 'Try adjusting your tag filters or create a new meeting'
+                  : 'Create your first meeting to get started with AI transcription'
+                }
               </Typography>
             </Paper>
           ) : (
             <Grid container spacing={3}>
-              {meetings.map((meeting, index) => (
+              {filteredMeetings.map((meeting, index) => (
                 <Grid item xs={12} sm={6} lg={4} key={meeting.id}>
                   <Fade in={true} timeout={300 + index * 100}>
                     <Card
@@ -347,8 +470,9 @@ const Dashboard: React.FC = () => {
                         },
                       }}
                       onClick={(e) => {
-                        // Only navigate if the click didn't come from the dropdown menu
-                        if (!(e.target as HTMLElement).closest('[data-dropdown-menu]')) {
+                        // Only navigate if the click didn't come from the dropdown menu or tag manager
+                        if (!(e.target as HTMLElement).closest('[data-dropdown-menu]') && 
+                            !(e.target as HTMLElement).closest('[data-tag-manager]')) {
                           navigate(`/meeting/${meeting.id}`);
                         }
                       }}
@@ -366,7 +490,7 @@ const Dashboard: React.FC = () => {
                           />
                         </Box>
                         
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                           <Chip
                             icon={getStatusIcon(meeting.status)}
                             label={meeting.status.charAt(0).toUpperCase() + meeting.status.slice(1)}
@@ -376,8 +500,48 @@ const Dashboard: React.FC = () => {
                           />
                         </Box>
 
+                        {/* Tags Section */}
+                        <Box sx={{ mb: 3 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                            <LocalOffer sx={{ fontSize: 16, color: 'text.secondary' }} />
+                            <Typography variant="caption" color="text.secondary">
+                              Tags
+                            </Typography>
+                            <IconButton
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleManageTags(meeting);
+                              }}
+                              data-tag-manager
+                              sx={{ ml: 'auto' }}
+                            >
+                              <Edit sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Box>
+                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, minHeight: 24 }}>
+                            {meeting.tags.length > 0 ? (
+                              meeting.tags.slice(0, 5).map(tag => (
+                                <TagChip key={tag.id} tag={tag} size="small" />
+                              ))
+                            ) : (
+                              <Typography variant="caption" color="text.secondary">
+                                No tags
+                              </Typography>
+                            )}
+                            {meeting.tags.length > 5 && (
+                              <Chip
+                                label={`+${meeting.tags.length - 5} more`}
+                                size="small"
+                                variant="outlined"
+                                sx={{ fontSize: '0.7rem' }}
+                              />
+                            )}
+                          </Box>
+                        </Box>
+
                         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                          Created on {new Date().toLocaleDateString()}
+                          Created on {new Date(meeting.start_time).toLocaleDateString()}
                         </Typography>
 
                         <Button
@@ -402,6 +566,20 @@ const Dashboard: React.FC = () => {
           )}
         </Box>
       </Container>
+
+      {/* Tag Manager Dialog */}
+      {selectedMeetingForTags && (
+        <TagManager
+          open={tagManagerOpen}
+          onClose={() => {
+            setTagManagerOpen(false);
+            setSelectedMeetingForTags(null);
+          }}
+          meetingId={selectedMeetingForTags.id}
+          currentTags={selectedMeetingForTags.tags}
+          onTagsUpdated={handleTagsUpdated}
+        />
+      )}
 
       {/* Snackbar for notifications */}
       <Snackbar

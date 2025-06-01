@@ -60,6 +60,12 @@ class Settings(BaseSettings):
         description="Show detailed backend logs"
     )
     
+    # Audio file management
+    AUTO_CLEANUP_AUDIO_FILES: bool = Field(
+        default=True,
+        description="Automatically delete audio files after successful summarization"
+    )
+    
     # Database SSL configuration (optional)
     DB_SSL_CERT: Optional[str] = Field(default=None, description="Database SSL certificate path")
     DB_SSL_KEY: Optional[str] = Field(default=None, description="Database SSL key path")
