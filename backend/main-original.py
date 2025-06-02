@@ -66,31 +66,8 @@ import librosa
 import soundfile as sf
 from scipy.signal import butter, filtfilt
 import noisereduce as nr
-# Production-safe imports
-try:
-    import whisperx
-    from pyannote.audio import Pipeline
-    from pyannote.core import Segment
-    HEAVY_ML_AVAILABLE = True
-    print("Heavy ML libraries loaded - full functionality available")
-except ImportError as e:
-    HEAVY_ML_AVAILABLE = False
-    print(f"Heavy ML libraries not available: {e}")
-    print("Using lightweight production mode")
-    
-    # Create minimal replacements
-    class MockPipeline:
-        def __call__(self, *args, **kwargs):
-            return []
-    
-    class MockSegment:
-        def __init__(self, start, end):
-            self.start = start
-            self.end = end
-    
-    whisperx = None
-    Pipeline = MockPipeline
-    Segment = MockSegmentfrom pyannote.core import Segment
+from pyannote.audio import Pipeline
+from pyannote.core import Segment
 
 # Import local modules
 from database import get_db, engine, SessionLocal
