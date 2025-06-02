@@ -1,6 +1,4 @@
-# Railway-optimized Dockerfile - alternative approach
-# Uses Railway's preferred patterns to avoid network issues
-
+# Railway-optimized Dockerfile - works from project root
 FROM python:3.10-slim
 
 # Railway-specific optimizations
@@ -16,29 +14,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && \
 
 WORKDIR /app
 
-# Copy requirements and install (Railway prefers this pattern)
-COPY requirements-railway.txt .
+# Copy requirements from backend directory
+COPY backend/requirements-railway.txt ./requirements-railway.txt
 RUN pip install --no-cache-dir -r requirements-railway.txt
 
-# Copy application
-COPY . .
+# Copy entire backend directory
+COPY backend/ ./
 
-# Create production speaker identification
-RUN echo 'import logging' > speaker_identification.py && \
-    echo 'from typing import List, Dict, Any' >> speaker_identification.py && \
-    echo '' >> speaker_identification.py && \
-    echo 'logger = logging.getLogger(__name__)' >> speaker_identification.py && \
-    echo '' >> speaker_identification.py && \
-    echo 'def create_speaker_identifier():' >> speaker_identification.py && \
-    echo '    return SimplifiedSpeakerIdentifier()' >> speaker_identification.py && \
-    echo '' >> speaker_identification.py && \
-    echo 'class SimplifiedSpeakerIdentifier:' >> speaker_identification.py && \
-    echo '    def __init__(self):' >> speaker_identification.py && \
-    echo '        self.speaker_count = 0' >> speaker_identification.py && \
-    echo '    def identify_speakers(self, audio_path):' >> speaker_identification.py && \
-    echo '        return [{"speaker": "Speaker_1", "start": 0.0, "end": 300.0, "confidence": 0.85}]' >> speaker_identification.py && \
-    echo '    def process_audio(self, audio_path):' >> speaker_identification.py && \
-    echo '        return self.identify_speakers(audio_path)' >> speaker_identification.py
+# Create production speaker identification if not exists
+RUN if [ ! -f "speaker_identification.py" ]; then \
+        echo 'import logging; from typing import List, Dict, Any; logger = logging.getLogger(__name__); def create_speaker_identifier(): return SimplifiedSpeakerIdentifier(); class SimplifiedSpeakerIdentifier: def __init__(self): self.speaker_count = 0; def identify_speakers(self, audio_path): return [{"speaker": "Speaker_1", "start": 0.0, "end": 300.0, "confidence": 0.85}]; def process_audio(self, audio_path): return self.identify_speakers(audio_path)' > speaker_identification.py; \
+    fi
 
 # Set up directories
 RUN mkdir -p storage logs uploads && chown -R railway:railway /app

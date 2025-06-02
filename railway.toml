@@ -3,7 +3,7 @@
 
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "backend/Dockerfile.railway"
+dockerfilePath = "Dockerfile"
 
 # Fallback Docker configuration (if Nixpacks fails)
 # Change builder to "DOCKERFILE" and uncomment below if needed:
