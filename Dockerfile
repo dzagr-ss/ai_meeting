@@ -6,9 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+# Install system dependencies including libmagic for python-magic
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    libmagic1 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* && \
     useradd -m railway
 
 # Set working directory
