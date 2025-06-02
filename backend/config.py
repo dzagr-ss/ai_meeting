@@ -20,23 +20,33 @@ class Settings(BaseSettings):
     # Database - Required, no default
     DATABASE_URL: str = Field(..., description="Database connection URL")
     
-    # JWT - Required, no insecure defaults
-    SECRET_KEY: str = Field(..., min_length=32, description="JWT secret key (minimum 32 characters)")
+    # JWT - Generate secure default for production if not set
+    SECRET_KEY: str = Field(
+        default_factory=lambda: secrets.token_urlsafe(32) if os.getenv("ENVIRONMENT") == "production" else "",
+        min_length=32, 
+        description="JWT secret key (minimum 32 characters)"
+    )
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
-    # OpenAI - Required for transcription features
-    OPENAI_API_KEY: str = Field(..., description="OpenAI API key for transcription")
+    # OpenAI - Optional in production to allow staged deployment
+    OPENAI_API_KEY: Optional[str] = Field(
+        default=None, 
+        description="OpenAI API key for transcription (required for full functionality)"
+    )
     
-    # Gemini API - Required for AI features
-    GEMINI_API_KEY: str = Field(..., description="Google Gemini API key")
+    # Gemini API - Optional in production to allow staged deployment
+    GEMINI_API_KEY: Optional[str] = Field(
+        default=None, 
+        description="Google Gemini API key (required for AI features)"
+    )
     
-    # Email configuration - Required for password reset
-    SMTP_SERVER: str = Field(..., description="SMTP server for email")
+    # Email configuration - Optional in production to allow staged deployment
+    SMTP_SERVER: Optional[str] = Field(default="smtp.gmail.com", description="SMTP server for email")
     SMTP_PORT: int = Field(587, description="SMTP port")
-    SMTP_USERNAME: str = Field(..., description="SMTP username")
-    SMTP_PASSWORD: str = Field(..., description="SMTP password")
-    FROM_EMAIL: str = Field(..., description="From email address")
+    SMTP_USERNAME: Optional[str] = Field(default=None, description="SMTP username")
+    SMTP_PASSWORD: Optional[str] = Field(default=None, description="SMTP password")
+    FROM_EMAIL: Optional[str] = Field(default=None, description="From email address")
     
     # Storage - Use Railway volumes in production
     STORAGE_PATH: str = Field(default="/app/storage", description="File storage path")
@@ -82,8 +92,16 @@ class Settings(BaseSettings):
 
     @validator('SECRET_KEY')
     def validate_secret_key(cls, v):
-        if not v or len(v) < 32:
+        if not v:
+            # Auto-generate in production if not provided
+            if os.getenv("ENVIRONMENT") == "production":
+                return secrets.token_urlsafe(32)
+            else:
+                raise ValueError('SECRET_KEY must be set in development')
+        
+        if len(v) < 32:
             raise ValueError('SECRET_KEY must be at least 32 characters long')
+        
         # Check for common insecure values
         insecure_keys = [
             'your-secret-key', 
@@ -105,8 +123,8 @@ class Settings(BaseSettings):
     
     @validator('OPENAI_API_KEY')
     def validate_openai_key(cls, v):
-        if not v or not v.startswith('sk-'):
-            raise ValueError('OPENAI_API_KEY must be a valid OpenAI API key')
+        if v and not v.startswith('sk-'):
+            raise ValueError('OPENAI_API_KEY must be a valid OpenAI API key starting with sk-')
         return v
     
     @validator('BACKEND_CORS_ORIGINS')
@@ -136,6 +154,21 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT.lower() == 'production'
+
+    @property
+    def has_openai_api(self) -> bool:
+        """Check if OpenAI API is available"""
+        return bool(self.OPENAI_API_KEY and self.OPENAI_API_KEY.startswith('sk-'))
+    
+    @property 
+    def has_gemini_api(self) -> bool:
+        """Check if Gemini API is available"""
+        return bool(self.GEMINI_API_KEY)
+    
+    @property
+    def has_email_config(self) -> bool:
+        """Check if email configuration is complete"""
+        return bool(self.SMTP_USERNAME and self.SMTP_PASSWORD and self.FROM_EMAIL)
 
     class Config:
         case_sensitive = True

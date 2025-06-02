@@ -90,7 +90,9 @@ except ImportError as e:
     
     whisperx = None
     Pipeline = MockPipeline
-    Segment = MockSegmentfrom pyannote.core import Segment
+    Segment = MockSegment
+
+from pyannote.core import Segment
 
 # Import local modules
 from database import get_db, engine, SessionLocal
@@ -790,7 +792,46 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to Meeting Transcription API"}
+    """Root endpoint with production readiness status"""
+    status = {
+        "message": "Meeting Transcription API",
+        "version": "1.0.0",
+        "environment": settings.ENVIRONMENT,
+        "status": "healthy",
+        "features": {
+            "transcription": {
+                "available": settings.has_openai_api,
+                "provider": "OpenAI Whisper" if settings.has_openai_api else "Not configured"
+            },
+            "ai_summaries": {
+                "available": settings.has_gemini_api,
+                "provider": "Google Gemini" if settings.has_gemini_api else "Not configured"
+            },
+            "email_notifications": {
+                "available": settings.has_email_config,
+                "provider": "SMTP" if settings.has_email_config else "Not configured"
+            },
+            "speaker_identification": {
+                "available": True,
+                "provider": "Simplified (Production Mode)"
+            }
+        }
+    }
+    
+    # Add configuration warnings for production
+    if settings.is_production:
+        warnings = []
+        if not settings.has_openai_api:
+            warnings.append("OpenAI API key not configured - transcription features limited")
+        if not settings.has_gemini_api:
+            warnings.append("Gemini API key not configured - AI summaries unavailable")
+        if not settings.has_email_config:
+            warnings.append("Email not configured - password reset unavailable")
+        
+        if warnings:
+            status["configuration_warnings"] = warnings
+            
+    return status
 
 @app.post("/admin/migrate-files")
 async def migrate_files_endpoint(
