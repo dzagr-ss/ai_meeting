@@ -1,7 +1,13 @@
+# Railway deployment configuration with multiple strategies
+# Try Nixpacks first (preferred), fallback to Docker
+
 [build]
-builder = "DOCKERFILE"
-dockerfilePath = "backend/Dockerfile"
-buildCommand = "echo 'Using optimized Railway deployment'"
+builder = "NIXPACKS"
+nixpacksConfigPath = "backend/nixpacks.toml"
+
+# Fallback Docker configuration (if Nixpacks fails)
+# Change builder to "DOCKERFILE" and uncomment below if needed:
+# dockerfilePath = "backend/Dockerfile.railway"
 
 [deploy]
 healthcheckPath = "/"
@@ -9,8 +15,13 @@ healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
 
+# Railway environment variables
 [environments.production.variables]
 PYTHONUNBUFFERED = "1"
 PYTHONDONTWRITEBYTECODE = "1"
 ENVIRONMENT = "production"
-STORAGE_PATH = "/app/storage" 
+STORAGE_PATH = "/app/storage"
+PORT = "8000"
+
+# Alternative Docker build command (uncomment if using Docker)
+# buildCommand = "echo 'Using Docker fallback deployment'" 
