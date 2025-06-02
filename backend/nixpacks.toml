@@ -1,25 +1,12 @@
-# Nixpacks configuration for Railway deployment
-# Alternative to Docker that avoids registry timeout issues
-
-[providers]
-python = "3.10"
+# Minimal Nixpacks configuration for Railway
+providers = ["python"]
 
 [variables]
 PYTHONDONTWRITEBYTECODE = "1"
 PYTHONUNBUFFERED = "1"
-PYTHONPATH = "/app"
-
-[phases.setup]
-nixPkgs = ["python310", "curl", "pkg-config"]
 
 [phases.install]
 cmds = ["pip install --no-cache-dir -r requirements-railway.txt"]
-
-[phases.build]
-cmds = [
-  "mkdir -p storage logs uploads",
-  "python -c \"import speaker_identification_simple; print('Using existing speaker identification')\" || python -c \"with open('speaker_identification.py', 'w') as f: f.write('''import logging\\nfrom typing import List, Dict, Any\\n\\nlogger = logging.getLogger(__name__)\\n\\ndef create_speaker_identifier():\\n    return SimplifiedSpeakerIdentifier()\\n\\nclass SimplifiedSpeakerIdentifier:\\n    def __init__(self):\\n        self.speaker_count = 0\\n    def identify_speakers(self, audio_path):\\n        return [{\\\"speaker\\\": \\\"Speaker_1\\\", \\\"start\\\": 0.0, \\\"end\\\": 300.0, \\\"confidence\\\": 0.85}]\\n    def process_audio(self, audio_path):\\n        return self.identify_speakers(audio_path)''')\""
-]
 
 [start]
 cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT" 
