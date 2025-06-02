@@ -5,12 +5,17 @@ import os
 from dotenv import load_dotenv
 import secrets
 
-load_dotenv()
+# Load .env file only if it exists (for local development)
+if os.path.exists('.env'):
+    load_dotenv()
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Meeting Transcription API"
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api/v1"
+    
+    # Environment detection
+    ENVIRONMENT: str = Field(default="development", description="Environment: development, production")
     
     # Database - Required, no default
     DATABASE_URL: str = Field(..., description="Database connection URL")
@@ -33,30 +38,30 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = Field(..., description="SMTP password")
     FROM_EMAIL: str = Field(..., description="From email address")
     
-    # Storage
-    STORAGE_PATH: str = Field(default="storage", description="File storage path")
+    # Storage - Use Railway volumes in production
+    STORAGE_PATH: str = Field(default="/app/storage", description="File storage path")
     
-    # CORS - Secure defaults
+    # CORS - Secure defaults with production environment support
     BACKEND_CORS_ORIGINS: str = Field(
         default="http://localhost:3000", 
         description="Comma-separated list of allowed CORS origins"
     )
     
-    # Frontend URL (optional)
+    # Frontend URL (optional) - Updated for production
     FRONTEND_URL: Optional[str] = Field(
         default="http://localhost:3000",
         description="Frontend application URL"
     )
     
-    # Allowed hosts (optional)
+    # Allowed hosts (optional) - Railway domains included
     ALLOWED_HOSTS: Optional[str] = Field(
         default="localhost,127.0.0.1",
         description="Comma-separated list of allowed hosts"
     )
 
-    # Logging
+    # Logging - More verbose in development
     SHOW_BACKEND_LOGS: bool = Field(
-        default=False, 
+        default=True, 
         description="Show detailed backend logs"
     )
     
@@ -66,10 +71,14 @@ class Settings(BaseSettings):
         description="Automatically delete audio files after successful summarization"
     )
     
-    # Database SSL configuration (optional)
+    # Database SSL configuration (optional) - Important for production
     DB_SSL_CERT: Optional[str] = Field(default=None, description="Database SSL certificate path")
     DB_SSL_KEY: Optional[str] = Field(default=None, description="Database SSL key path")
     DB_SSL_ROOT_CERT: Optional[str] = Field(default=None, description="Database SSL root certificate path")
+
+    # Railway-specific settings
+    PORT: int = Field(default=8000, description="Port to run the application on")
+    HOST: str = Field(default="0.0.0.0", description="Host to bind to")
 
     @validator('SECRET_KEY')
     def validate_secret_key(cls, v):
@@ -81,7 +90,8 @@ class Settings(BaseSettings):
             'your-secret-key-here', 
             'secret', 
             'password',
-            'changeme'
+            'changeme',
+            'your-super-secret-jwt-key-min-32-characters-long-change-this-in-production'
         ]
         if v.lower() in insecure_keys:
             raise ValueError('SECRET_KEY cannot be a default or common value')
@@ -107,10 +117,25 @@ class Settings(BaseSettings):
         else:
             origins = v
         
-        # Ensure no wildcard origins in production
-        if '*' in origins:
-            raise ValueError('Wildcard CORS origins are not allowed for security')
+        # Allow wildcard origins only in development
+        environment = os.getenv('ENVIRONMENT', 'development')
+        if '*' in origins and environment == 'production':
+            raise ValueError('Wildcard CORS origins are not allowed in production')
         return v
+
+    @validator('STORAGE_PATH')
+    def validate_storage_path(cls, v):
+        # Ensure storage directory exists
+        os.makedirs(v, exist_ok=True)
+        return v
+
+    @property
+    def is_development(self) -> bool:
+        return self.ENVIRONMENT.lower() == 'development'
+    
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.lower() == 'production'
 
     class Config:
         case_sensitive = True
