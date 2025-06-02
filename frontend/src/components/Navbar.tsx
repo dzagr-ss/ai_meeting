@@ -23,6 +23,7 @@ import {
 } from '@mui/icons-material';
 import { RootState } from '../store';
 import { logout } from '../store/slices/authSlice';
+import ThemeToggle from './ThemeToggle';
 
 const Navbar: React.FC = () => {
   const navigate = useNavigate();
@@ -106,6 +107,7 @@ const Navbar: React.FC = () => {
                   display: { xs: 'none', md: 'flex' },
                 }}
               />
+              <ThemeToggle />
               <IconButton
                 onClick={handleMenuOpen}
                 sx={{
@@ -163,7 +165,8 @@ const Navbar: React.FC = () => {
               </Menu>
             </>
           ) : (
-            <Box sx={{ display: 'flex', gap: 1 }}>
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+              <ThemeToggle />
               <Button
                 variant="outlined"
                 onClick={() => navigate('/login')}
