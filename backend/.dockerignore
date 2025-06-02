@@ -1,0 +1,73 @@
+# Git files
+.git
+.gitignore
+
+# Environment and configuration files
+.env
+.env.local
+.env.*.local
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache
+.coverage
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files
+*.log
+logs/
+app.log
+security.log
+audit.log
+
+# Storage and temporary files
+storage/
+tmp/
+temp/
+*.tmp
+
+# Documentation
+README.md
+docs/
+*.md
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Development files
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/ 

@@ -2,6 +2,22 @@ import axios, { AxiosResponse, AxiosError } from 'axios';
 import { store } from '../store';
 import { logout } from '../store/slices/authSlice';
 
+// Environment-aware API URL configuration
+const getApiUrl = (): string => {
+  // Production URL from environment variable
+  if (process.env.REACT_APP_API_URL) {
+    return process.env.REACT_APP_API_URL;
+  }
+  
+  // Development fallback
+  if (process.env.NODE_ENV === 'development') {
+    return 'http://localhost:8000';
+  }
+  
+  // Production fallback (you'll need to update this with your Railway URL)
+  return 'https://your-backend-name.railway.app';
+};
+
 // Input validation and sanitization utilities
 export const sanitizeInput = (input: string): string => {
   if (!input) return '';
@@ -140,12 +156,17 @@ class RateLimiter {
 
 const rateLimiter = new RateLimiter();
 
-// Create axios instance
+// Create axios instance with environment-aware configuration
 const api = axios.create({
-  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:8000',
+  baseURL: getApiUrl(),
   timeout: 30000, // 30 seconds timeout
   withCredentials: false, // Disable credentials for security
 });
+
+// Log the API URL for debugging (only in development)
+if (process.env.NODE_ENV === 'development') {
+  console.log('API URL:', getApiUrl());
+}
 
 // Request interceptor to add auth token and validate requests
 api.interceptors.request.use(
