@@ -40,16 +40,7 @@ COPY backend/ .
 
 # Test application imports (basic test without full app)
 RUN echo "=== Testing basic imports ===" && \
-    python -c "
-import sys
-print('Testing critical imports...')
-try:
-    import fastapi, uvicorn, starlette, itsdangerous, pydantic, sqlalchemy
-    print('✅ All critical web framework imports successful')
-except Exception as e:
-    print(f'❌ Import test failed: {e}')
-    sys.exit(1)
-" || echo "Basic import test failed during build"
+    python -c "import sys; print('Testing critical imports...'); import fastapi, uvicorn, starlette, itsdangerous, pydantic, sqlalchemy; print('✅ All critical web framework imports successful')" || echo "Basic import test failed during build"
 
 # Create directories
 RUN mkdir -p storage logs uploads && \
