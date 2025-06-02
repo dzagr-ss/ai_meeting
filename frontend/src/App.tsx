@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import { Box, CssBaseline, Snackbar, Alert } from '@mui/material';
 import { ThemeProvider } from '@mui/material/styles';
 import { RootState } from './store';
 import { validateToken } from './store/slices/authSlice';
-import theme from './theme';
+import createAppTheme from './theme';
 
 // Components
 import Navbar from './components/Navbar';
@@ -18,8 +18,12 @@ import ResetPassword from './pages/ResetPassword';
 
 const App: React.FC = () => {
   const { isAuthenticated } = useSelector((state: RootState) => state.auth);
+  const { mode } = useSelector((state: RootState) => state.theme);
   const dispatch = useDispatch();
   const [tokenExpiredMessage, setTokenExpiredMessage] = useState<string | null>(null);
+
+  // Create theme based on current mode
+  const theme = useMemo(() => createAppTheme(mode), [mode]);
 
   useEffect(() => {
     // Listen for token expiration events

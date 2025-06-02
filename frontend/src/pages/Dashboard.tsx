@@ -44,6 +44,8 @@ import {
 import MeetingDropdownMenu from '../components/MeetingDropdownMenu';
 import TagChip from '../components/TagChip';
 import TagManager from '../components/TagManager';
+import ViewToggle from '../components/ViewToggle';
+import CalendarView from '../components/CalendarView';
 import api from '../utils/api';
 
 interface Tag {
@@ -67,6 +69,7 @@ const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
   const { meetings, loading, selectedTags } = useAppSelector((state) => state.meeting);
+  const { view } = useAppSelector((state) => state.dashboard);
   const { token } = useAppSelector((state) => state.auth);
   const [newMeetingTitle, setNewMeetingTitle] = useState('');
   const [availableTags, setAvailableTags] = useState<Tag[]>([]);
@@ -184,6 +187,10 @@ const Dashboard: React.FC = () => {
     dispatch(clearSelectedTags());
   };
 
+  const handleSelectMeeting = (meeting: Meeting) => {
+    navigate(`/meeting/${meeting.id}`);
+  };
+
   // Filter meetings based on selected tags
   const filteredMeetings = selectedTags.length > 0 
     ? meetings.filter(meeting => 
@@ -234,6 +241,163 @@ const Dashboard: React.FC = () => {
       </Box>
     );
   }
+
+  const renderGridView = () => (
+    <Box>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Typography variant="h5" fontWeight={600}>
+          Your Meetings
+        </Typography>
+        <ViewToggle />
+      </Box>
+      
+      {filteredMeetings.length === 0 ? (
+        <Paper
+          sx={{
+            p: 6,
+            textAlign: 'center',
+            borderRadius: 3,
+            border: '2px dashed #e2e8f0',
+            backgroundColor: 'transparent',
+          }}
+        >
+          <VideoCall sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
+          <Typography variant="h6" color="text.secondary" gutterBottom>
+            {selectedTags.length > 0 ? 'No meetings match the selected tags' : 'No meetings yet'}
+          </Typography>
+          <Typography variant="body1" color="text.secondary">
+            {selectedTags.length > 0 
+              ? 'Try adjusting your tag filters or create a new meeting'
+              : 'Create your first meeting to get started with AI transcription'
+            }
+          </Typography>
+        </Paper>
+      ) : (
+        <Grid container spacing={3}>
+          {filteredMeetings.map((meeting, index) => (
+            <Grid item xs={12} sm={6} lg={4} key={meeting.id}>
+              <Fade in={true} timeout={300 + index * 100}>
+                <Card
+                  sx={{
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease-in-out',
+                    '&:hover': {
+                      transform: 'translateY(-4px)',
+                      boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)',
+                    },
+                  }}
+                  onClick={(e) => {
+                    // Only navigate if the click didn't come from the dropdown menu or tag manager
+                    if (!(e.target as HTMLElement).closest('[data-dropdown-menu]') && 
+                        !(e.target as HTMLElement).closest('[data-tag-manager]')) {
+                      navigate(`/meeting/${meeting.id}`);
+                    }
+                  }}
+                >
+                  <CardContent sx={{ flexGrow: 1, p: 3 }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                      <Typography variant="h6" component="h2" fontWeight={600} sx={{ flexGrow: 1, pr: 1 }}>
+                        {meeting.title}
+                      </Typography>
+                      <MeetingDropdownMenu
+                        meetingId={meeting.id}
+                        meetingTitle={meeting.title}
+                        onRename={handleRenameMeeting}
+                        onDelete={handleDeleteMeeting}
+                      />
+                    </Box>
+                    
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                      <Chip
+                        icon={getStatusIcon(meeting.status)}
+                        label={meeting.status.charAt(0).toUpperCase() + meeting.status.slice(1)}
+                        color={getStatusColor(meeting.status) as any}
+                        size="small"
+                        variant="outlined"
+                      />
+                    </Box>
+
+                    {/* Tags Section */}
+                    <Box sx={{ mb: 3 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                        <LocalOffer sx={{ fontSize: 16, color: 'text.secondary' }} />
+                        <Typography variant="caption" color="text.secondary">
+                          Tags
+                        </Typography>
+                        <IconButton
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleManageTags(meeting);
+                          }}
+                          data-tag-manager
+                          sx={{ ml: 'auto' }}
+                        >
+                          <Edit sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Box>
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, minHeight: 24 }}>
+                        {meeting.tags.length > 0 ? (
+                          meeting.tags.slice(0, 5).map(tag => (
+                            <TagChip key={tag.id} tag={tag} size="small" />
+                          ))
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">
+                            No tags
+                          </Typography>
+                        )}
+                        {meeting.tags.length > 5 && (
+                          <Chip
+                            label={`+${meeting.tags.length - 5} more`}
+                            size="small"
+                            variant="outlined"
+                            sx={{ fontSize: '0.7rem' }}
+                          />
+                        )}
+                      </Box>
+                    </Box>
+
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                      Created on {new Date(meeting.start_time).toLocaleDateString()}
+                    </Typography>
+
+                    <Button
+                      variant="contained"
+                      fullWidth
+                      startIcon={<VideoCall />}
+                      sx={{
+                        background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+                        '&:hover': {
+                          background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+                        },
+                      }}
+                    >
+                      Join Meeting
+                    </Button>
+                  </CardContent>
+                </Card>
+              </Fade>
+            </Grid>
+          ))}
+        </Grid>
+      )}
+    </Box>
+  );
+
+  const renderCalendarView = () => (
+    <Box>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Typography variant="h5" fontWeight={600}>
+          Your Meetings
+        </Typography>
+        <ViewToggle />
+      </Box>
+      <CalendarView meetings={filteredMeetings} onSelectMeeting={handleSelectMeeting} />
+    </Box>
+  );
 
   return (
     <Box sx={{ minHeight: '100vh', backgroundColor: 'background.default', py: 4 }}>
@@ -425,146 +589,8 @@ const Dashboard: React.FC = () => {
           )}
         </Box>
 
-        {/* Meetings Grid */}
-        <Box>
-          <Typography variant="h5" fontWeight={600} gutterBottom sx={{ mb: 3 }}>
-            Your Meetings
-          </Typography>
-          
-          {filteredMeetings.length === 0 ? (
-            <Paper
-              sx={{
-                p: 6,
-                textAlign: 'center',
-                borderRadius: 3,
-                border: '2px dashed #e2e8f0',
-                backgroundColor: 'transparent',
-              }}
-            >
-              <VideoCall sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
-              <Typography variant="h6" color="text.secondary" gutterBottom>
-                {selectedTags.length > 0 ? 'No meetings match the selected tags' : 'No meetings yet'}
-              </Typography>
-              <Typography variant="body1" color="text.secondary">
-                {selectedTags.length > 0 
-                  ? 'Try adjusting your tag filters or create a new meeting'
-                  : 'Create your first meeting to get started with AI transcription'
-                }
-              </Typography>
-            </Paper>
-          ) : (
-            <Grid container spacing={3}>
-              {filteredMeetings.map((meeting, index) => (
-                <Grid item xs={12} sm={6} lg={4} key={meeting.id}>
-                  <Fade in={true} timeout={300 + index * 100}>
-                    <Card
-                      sx={{
-                        height: '100%',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease-in-out',
-                        '&:hover': {
-                          transform: 'translateY(-4px)',
-                          boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)',
-                        },
-                      }}
-                      onClick={(e) => {
-                        // Only navigate if the click didn't come from the dropdown menu or tag manager
-                        if (!(e.target as HTMLElement).closest('[data-dropdown-menu]') && 
-                            !(e.target as HTMLElement).closest('[data-tag-manager]')) {
-                          navigate(`/meeting/${meeting.id}`);
-                        }
-                      }}
-                    >
-                      <CardContent sx={{ flexGrow: 1, p: 3 }}>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-                          <Typography variant="h6" component="h2" fontWeight={600} sx={{ flexGrow: 1, pr: 1 }}>
-                            {meeting.title}
-                          </Typography>
-                          <MeetingDropdownMenu
-                            meetingId={meeting.id}
-                            meetingTitle={meeting.title}
-                            onRename={handleRenameMeeting}
-                            onDelete={handleDeleteMeeting}
-                          />
-                        </Box>
-                        
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                          <Chip
-                            icon={getStatusIcon(meeting.status)}
-                            label={meeting.status.charAt(0).toUpperCase() + meeting.status.slice(1)}
-                            color={getStatusColor(meeting.status) as any}
-                            size="small"
-                            variant="outlined"
-                          />
-                        </Box>
-
-                        {/* Tags Section */}
-                        <Box sx={{ mb: 3 }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                            <LocalOffer sx={{ fontSize: 16, color: 'text.secondary' }} />
-                            <Typography variant="caption" color="text.secondary">
-                              Tags
-                            </Typography>
-                            <IconButton
-                              size="small"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleManageTags(meeting);
-                              }}
-                              data-tag-manager
-                              sx={{ ml: 'auto' }}
-                            >
-                              <Edit sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Box>
-                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, minHeight: 24 }}>
-                            {meeting.tags.length > 0 ? (
-                              meeting.tags.slice(0, 5).map(tag => (
-                                <TagChip key={tag.id} tag={tag} size="small" />
-                              ))
-                            ) : (
-                              <Typography variant="caption" color="text.secondary">
-                                No tags
-                              </Typography>
-                            )}
-                            {meeting.tags.length > 5 && (
-                              <Chip
-                                label={`+${meeting.tags.length - 5} more`}
-                                size="small"
-                                variant="outlined"
-                                sx={{ fontSize: '0.7rem' }}
-                              />
-                            )}
-                          </Box>
-                        </Box>
-
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                          Created on {new Date(meeting.start_time).toLocaleDateString()}
-                        </Typography>
-
-                        <Button
-                          variant="contained"
-                          fullWidth
-                          startIcon={<VideoCall />}
-                          sx={{
-                            background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
-                            '&:hover': {
-                              background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-                            },
-                          }}
-                        >
-                          Join Meeting
-                        </Button>
-                      </CardContent>
-                    </Card>
-                  </Fade>
-                </Grid>
-              ))}
-            </Grid>
-          )}
-        </Box>
+        {/* Meetings Section - Conditional Rendering */}
+        {view === 'grid' ? renderGridView() : renderCalendarView()}
       </Container>
 
       {/* Tag Manager Dialog */}
