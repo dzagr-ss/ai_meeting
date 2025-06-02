@@ -1,6 +1,7 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "backend/Dockerfile"
+buildCommand = "echo 'Using optimized Railway deployment'"
 
 [deploy]
 healthcheckPath = "/"
@@ -11,4 +12,5 @@ restartPolicyMaxRetries = 10
 [environments.production.variables]
 PYTHONUNBUFFERED = "1"
 PYTHONDONTWRITEBYTECODE = "1"
+ENVIRONMENT = "production"
 STORAGE_PATH = "/app/storage" 

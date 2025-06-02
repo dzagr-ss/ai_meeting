@@ -1,328 +1,255 @@
-# Deployment Guide
+# Deployment Guide for Meeting Transcription System
 
-This guide will help you deploy your Meeting Transcription System to Railway (backend) and Vercel (frontend).
+## Overview
+This guide provides step-by-step instructions for deploying the Meeting Transcription System to Railway (backend) and Vercel (frontend).
 
-## 🚀 Prerequisites
+## System Architecture
+- **Backend**: FastAPI with ultra-minimal dependencies (366MB Docker image)
+- **Frontend**: React with Material-UI and Redux Toolkit
+- **Database**: PostgreSQL on Railway
+- **Storage**: File uploads via backend API
 
-1. **GitHub Account** - Your code should be in a GitHub repository
-2. **Railway Account** - Sign up at [railway.app](https://railway.app)
-3. **Vercel Account** - Sign up at [vercel.com](https://vercel.com)
-4. **API Keys**:
-   - OpenAI API Key (starts with `sk-`)
-   - Google Gemini API Key
-   - SMTP credentials for email functionality
+## Prerequisites
+- Railway account
+- Vercel account
+- GitHub repository for your code
+- OpenAI API key
+- Google Generative AI API key
 
-## ⚡ Quick Deployment (Recommended)
+## Production Optimizations Applied
+- **Ultra-minimal Docker image**: Reduced from 6.8GB to 366MB
+- **CPU-only dependencies**: No heavy ML libraries
+- **Simplified speaker identification**: Basic logic instead of pyannote.audio
+- **OpenAI API integration**: For transcription instead of local WhisperX
+- **Environment-aware code**: Gracefully handles missing dependencies
 
-Run the automated deployment preparation script:
+## Backend Deployment (Railway)
+
+### 1. Prepare the Backend
+
+The backend has been optimized with minimal dependencies in `backend/requirements-railway.txt`:
+
 ```bash
+# Core dependencies only - no heavy ML libraries
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
+pydantic==2.5.2
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.10
+openai==1.3.5
+google-generativeai
+# ... other minimal dependencies
+```
+
+### 2. Deploy to Railway
+
+1. **Connect GitHub Repository**:
+   - Go to [railway.app](https://railway.app)
+   - Click "Start a New Project"
+   - Select "Deploy from GitHub repo"
+   - Choose your repository
+
+2. **Configure PostgreSQL Database**:
+   ```bash
+   # Railway will automatically provide DATABASE_URL
+   # No manual setup required
+   ```
+
+3. **Set Environment Variables** in Railway dashboard:
+   ```
+   ENVIRONMENT=production
+   DATABASE_URL=<automatically provided by Railway>
+   SECRET_KEY=<generate a secure random string>
+   OPENAI_API_KEY=<your OpenAI API key>
+   GOOGLE_API_KEY=<your Google Generative AI key>
+   STORAGE_PATH=/app/storage
+   PYTHONUNBUFFERED=1
+   PYTHONDONTWRITEBYTECODE=1
+   ```
+
+4. **Deploy**:
+   - Railway will automatically detect the `railway.toml` configuration
+   - Uses the optimized `backend/Dockerfile`
+   - Build should complete in under 5 minutes with 366MB image
+
+### 3. Verify Backend Deployment
+
+1. **Check Health Endpoint**:
+   ```bash
+   curl https://your-railway-domain.railway.app/
+   ```
+
+2. **Test API Documentation**:
+   ```
+   https://your-railway-domain.railway.app/docs
+   ```
+
+## Frontend Deployment (Vercel)
+
+### 1. Prepare Frontend Environment
+
+1. **Create `frontend/.env.production`**:
+   ```
+   VITE_API_URL=https://your-railway-domain.railway.app
+   VITE_ENVIRONMENT=production
+   ```
+
+### 2. Deploy to Vercel
+
+1. **Connect Repository**:
+   - Go to [vercel.com](https://vercel.com)
+   - Click "New Project"
+   - Import your GitHub repository
+
+2. **Configure Build Settings**:
+   - **Framework Preset**: Vite
+   - **Root Directory**: `frontend`
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `dist`
+
+3. **Set Environment Variables**:
+   ```
+   VITE_API_URL=https://your-railway-domain.railway.app
+   VITE_ENVIRONMENT=production
+   ```
+
+4. **Deploy**:
+   - Vercel will automatically build and deploy
+   - Takes approximately 2-3 minutes
+
+### 3. Verify Frontend Deployment
+
+1. **Check Application**:
+   - Visit your Vercel domain
+   - Test login/registration
+   - Upload a small audio file
+
+## Automated Deployment Scripts
+
+### Quick Deploy Script
+```bash
+# Run from project root
 ./deploy-to-railway.sh
 ```
 
-This script will:
-- Optimize Docker image for Railway's 4GB limit
-- Test the build locally
-- Provide step-by-step deployment instructions
-- Check environment variables
-
-## 📦 Backend Deployment (Railway)
-
-### Step 1: Prepare Environment Variables
-
-First, generate a secure secret key:
+### Local Development Setup
 ```bash
-python -c "import secrets; print(secrets.token_urlsafe(32))"
+# Run from project root
+./setup-local-env.sh
 ```
 
-### Step 2: Image Size Optimization
+## Production Features
 
-**Important**: Railway has a 4GB image size limit. This app uses CPU-only PyTorch and lightweight dependencies to stay under this limit.
+### Audio Processing
+- **Transcription**: OpenAI Whisper API (cloud-based)
+- **Speaker Identification**: Simplified algorithm (no heavy ML)
+- **File Formats**: MP3, WAV, M4A via pydub
+- **Storage**: Local file system with configurable path
 
-**Production Optimizations Applied**:
-- ✅ CPU-only PyTorch (vs. CUDA version saves ~3GB)
-- ✅ Removed heavy ML libraries (pyannote.audio, speechbrain, pytorch-lightning)
-- ✅ Uses OpenAI API for transcription (more reliable than local models)
-- ✅ Simplified speaker identification
-- ✅ Multi-stage Docker build with cleanup
+### Authentication
+- **JWT-based authentication**
+- **Secure password hashing with bcrypt**
+- **Session management**
 
-**Final image size**: ~2.5GB (well under Railway's 4GB limit)
+### Database
+- **PostgreSQL with SQLAlchemy ORM**
+- **Alembic migrations**
+- **Connection pooling**
 
-### Step 3: Deploy to Railway
+## Monitoring and Maintenance
 
-1. **Go to Railway Dashboard**
-   - Visit [railway.app](https://railway.app) and sign in
-   - Click "New Project"
+### Health Checks
+- Backend: `GET /` endpoint
+- Automatic Railway health monitoring
+- 30-second intervals with 5-second startup grace period
 
-2. **Connect GitHub Repository**
-   - Select "Deploy from GitHub repo"
-   - Choose your repository
-   - Select the `main` branch
-
-3. **Add PostgreSQL Database**
-   - In your project dashboard, click "New Service"
-   - Select "Database" → "PostgreSQL"
-   - Railway will automatically create a database and provide connection details
-
-4. **Configure Environment Variables**
-   - Go to your backend service
-   - Click on "Variables" tab
-   - Add the following environment variables:
-
-   ```bash
-   # Required Variables
-   DATABASE_URL=postgresql://username:password@host:port/database  # Auto-provided by Railway
-   SECRET_KEY=your-generated-secret-key-from-step-1
-   OPENAI_API_KEY=sk-your-openai-api-key
-   GEMINI_API_KEY=your-google-gemini-api-key
-   
-   # Email Configuration
-   SMTP_SERVER=smtp.gmail.com
-   SMTP_PORT=587
-   SMTP_USERNAME=your-email@gmail.com
-   SMTP_PASSWORD=your-app-password
-   FROM_EMAIL=your-email@gmail.com
-   
-   # Production Settings
-   ENVIRONMENT=production
-   BACKEND_CORS_ORIGINS=https://your-frontend-domain.vercel.app
-   FRONTEND_URL=https://your-frontend-domain.vercel.app
-   ALLOWED_HOSTS=your-backend-name.railway.app
-   STORAGE_PATH=/app/storage
-   
-   # Features
-   SHOW_BACKEND_LOGS=true
-   AUTO_CLEANUP_AUDIO_FILES=true
-   ```
-
-5. **Add Volume Storage (Recommended)**
-   - Go to "Settings" → "Volumes"
-   - Add a new volume:
-     - Mount Path: `/app/storage`
-     - Size: 1GB (or as needed)
-
-6. **Deploy**
-   - Railway will automatically build and deploy using the optimized Dockerfile
-   - Build time: ~5-10 minutes (reduced from 20+ minutes)
-   - Wait for deployment to complete
-   - Note your Railway backend URL (e.g., `https://your-backend-name.railway.app`)
-
-### Step 4: Run Database Migrations
-
-Once deployed, you need to run database migrations:
-
-1. **Install Railway CLI**:
-   ```bash
-   npm install -g @railway/cli
-   ```
-
-2. **Run migrations**:
-   ```bash
-   # Connect to your Railway service
-   railway login
-   railway link
-   
-   # Run database migrations
-   railway run alembic upgrade head
-   ```
-
-## 🌐 Frontend Deployment (Vercel)
-
-### Step 1: Create Environment Variables
-
-Create a `.env.local` file in your frontend directory:
+### Logs
 ```bash
-REACT_APP_API_URL=https://your-backend-name.railway.app
+# View Railway logs
+railway logs --follow
+
+# View local logs
+tail -f backend/app.log
 ```
 
-### Step 2: Deploy to Vercel
-
-1. **Go to Vercel Dashboard**
-   - Visit [vercel.com](https://vercel.com) and sign in
-   - Click "New Project"
-
-2. **Import Repository**
-   - Select "Import Git Repository"
-   - Choose your GitHub repository
-   - Select the `frontend` folder as the root directory
-
-3. **Configure Build Settings**
-   - Framework Preset: Create React App
-   - Root Directory: `frontend`
-   - Build Command: `npm run build`
-   - Output Directory: `build`
-
-4. **Add Environment Variables**
-   - In the deployment configuration, add:
-     ```
-     REACT_APP_API_URL = https://your-backend-name.railway.app
-     ```
-
-5. **Deploy**
-   - Click "Deploy"
-   - Vercel will build and deploy your frontend
-   - Note your Vercel frontend URL
-
-### Step 3: Update CORS Settings
-
-Go back to Railway and update your backend environment variables:
+### Database Management
 ```bash
-BACKEND_CORS_ORIGINS=https://your-actual-vercel-url.vercel.app
-FRONTEND_URL=https://your-actual-vercel-url.vercel.app
+# Run migrations (if needed)
+railway run alembic upgrade head
+
+# Access database console
+railway connect <database-service-name>
 ```
 
-## 🔄 Update Frontend API URL
-
-Update the production fallback in `frontend/src/utils/api.ts`:
-```typescript
-// Production fallback (update this with your actual Railway URL)
-return 'https://your-actual-backend-name.railway.app';
-```
-
-## ⚙️ Production Mode Features
-
-Your production deployment includes these optimizations:
-
-### **Lightweight Processing**:
-- **Transcription**: Uses OpenAI Whisper API (more reliable)
-- **Speaker Identification**: Simplified approach (basic but functional)
-- **Audio Processing**: Essential features only
-- **File Storage**: Optimized cleanup and management
-
-### **Performance Benefits**:
-- ⚡ Faster startup times
-- 💾 Lower memory usage
-- 🚀 Quicker deployments
-- 💰 Reduced costs
-
-### **API Response Example**:
-```json
-{
-  "message": "Meeting Transcription API",
-  "version": "1.0.0",
-  "mode": "lightweight",
-  "features": {
-    "transcription": "OpenAI API",
-    "speaker_diarization": "simplified",
-    "audio_processing": "basic"
-  }
-}
-```
-
-## ✅ Post-Deployment Checklist
-
-### Backend Health Check
-1. Visit `https://your-backend-name.railway.app/` - should return a JSON response
-2. Check Railway logs for any errors
-3. Test authentication by creating a user account
-4. Verify it shows `"mode": "lightweight"` in the response
-
-### Frontend Testing
-1. Visit your Vercel URL
-2. Test user registration and login
-3. Create a test meeting
-4. Upload a test audio file (transcription via OpenAI API)
-
-### Database Verification
-1. Check Railway database metrics
-2. Verify tables were created correctly
-3. Test CRUD operations
-
-## 🛠️ Local Development Setup
-
-To keep your local development working:
-
-1. **Run the setup script**:
-   ```bash
-   ./setup-local-env.sh
-   ```
-
-2. **Your local environment can use full ML libraries**:
-   - Heavy dependencies work in development
-   - Full speaker diarization available
-   - Local WhisperX processing
-
-## 🚨 Security Considerations
-
-1. **Never commit `.env` files** - they're already in `.gitignore`
-2. **Use strong secret keys** - generate new ones for production
-3. **Enable HTTPS only** - both Railway and Vercel provide this automatically
-4. **Restrict CORS origins** - only allow your frontend domain
-5. **Monitor logs** - check Railway logs regularly for issues
-
-## 💰 Cost Estimates
-
-### Railway (Backend + Database)
-- **Hobby Plan**: $5/month (includes $5 usage credit)
-- **Expected usage**: $8-15/month for low traffic (optimized!)
-- **PostgreSQL**: Included in usage
-- **Volume Storage**: $0.25/GB/month
-
-### Vercel (Frontend)
-- **Free tier**: Perfect for most use cases
-- **Generous limits**: 100GB bandwidth, unlimited static requests
-
-### **Total Monthly Cost: $8-20** (reduced from $15-30 with optimizations!)
-
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
-1. **Image size exceeded limit**:
-   - ✅ **Fixed**: Optimized Dockerfile reduces image from 6.8GB to ~2.5GB
-   - Uses CPU-only PyTorch and lightweight dependencies
+1. **Build Timeout (Exit Code 137)**
+   - **Solution**: Use the optimized `backend/requirements-railway.txt` file
+   - Avoid heavy ML libraries like pytorch-lightning, pyannote.audio
 
-2. **Build failures**:
-   - Check Railway build logs
-   - Ensure all dependencies are in requirements-production.txt
-   - Verify Dockerfile syntax
+2. **Import Errors in Production**
+   - **Solution**: Code includes graceful fallbacks for missing dependencies
+   - Check `backend/config.py` environment detection
 
-3. **Database connection issues**:
-   - Verify DATABASE_URL is set correctly
-   - Check if migrations ran successfully
-   - Ensure PostgreSQL service is running
+3. **File Upload Issues**
+   - **Solution**: Ensure `STORAGE_PATH` environment variable is set
+   - Check directory permissions in container
 
-4. **CORS errors**:
-   - Update BACKEND_CORS_ORIGINS with correct frontend URL
-   - Ensure no trailing slashes in URLs
+4. **Database Connection Errors**
+   - **Solution**: Verify `DATABASE_URL` is correctly set by Railway
+   - Check PostgreSQL service status in Railway dashboard
 
-5. **Frontend API connection**:
-   - Verify REACT_APP_API_URL is set correctly
-   - Check browser network tab for failed requests
-   - Ensure backend is accessible
+### Performance Optimization
 
-### Getting Help
+1. **Backend Performance**:
+   - Single worker configuration for Railway's memory limits
+   - Async FastAPI endpoints
+   - Connection pooling
 
-1. **Railway**: Check their documentation and Discord community
-2. **Vercel**: Excellent documentation and support
-3. **Your App**: Check logs in both Railway and browser console
+2. **Frontend Performance**:
+   - Code splitting with React lazy loading
+   - Optimized build with Vite
+   - Static asset optimization
 
-## 🔄 Updates and Maintenance
+## Cost Estimation
 
-### Updating the Application
-1. **Push to GitHub** - both platforms auto-deploy on git push
-2. **Environment variables** - update through platform dashboards
-3. **Database migrations** - run via Railway CLI when needed
+### Railway (Backend + Database)
+- **Hobby Plan**: $5/month + usage
+- **Pro Plan**: $20/month + usage
+- **Database**: Included in plan
 
-### Monitoring
-1. **Railway**: Built-in metrics and logs
-2. **Vercel**: Analytics and performance monitoring
-3. **Set up alerts** for downtime or errors
+### Vercel (Frontend)
+- **Hobby Plan**: Free for personal projects
+- **Pro Plan**: $20/month for teams
 
-## 🎉 You're Done!
+### External APIs
+- **OpenAI**: ~$0.006 per minute of audio
+- **Google Generative AI**: Free tier available
 
-Your Meeting Transcription System should now be running in production with optimized performance and costs!
+## Security Considerations
 
-### **What You Get**:
-- ✅ Fast, reliable transcription via OpenAI API
-- ✅ Basic speaker identification
-- ✅ Full meeting management and tagging
-- ✅ Secure authentication and file handling
-- ✅ Dark/light theme support
-- ✅ Calendar and grid dashboard views
-- ✅ Cost-optimized deployment
+1. **Environment Variables**: Never commit API keys to repository
+2. **CORS**: Properly configured for frontend domain
+3. **Authentication**: JWT tokens with secure secrets
+4. **File Uploads**: Size limits and type validation
+5. **Rate Limiting**: Implemented via slowapi
 
-### **Future Enhancements**:
-If you need advanced features later, you can:
-- Upgrade Railway plan for larger images
-- Add heavy ML libraries back for local speaker diarization
-- Implement real-time transcription with WebSocket streaming 
+## Scaling Considerations
+
+1. **Backend Scaling**: Railway auto-scales based on traffic
+2. **Database**: PostgreSQL can handle moderate loads
+3. **File Storage**: Consider cloud storage (S3, GCS) for production scale
+4. **CDN**: Vercel provides global CDN for frontend
+
+## Support
+
+For deployment issues:
+1. Check Railway/Vercel logs first
+2. Verify environment variables
+3. Test API endpoints individually
+4. Review this deployment guide
+
+Last updated: December 2024 
