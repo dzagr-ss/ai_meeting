@@ -31,4 +31,4 @@ pydub==0.25.1
 # Utilities
 slowapi==0.1.9
 redis==3.5.3
-python-magic 
+python-magic==0.4.27 

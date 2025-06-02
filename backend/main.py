@@ -29,15 +29,31 @@ import re
 from urllib.parse import quote
 
 # Try to import magic with fallback
-try:
-    import magic
-    MAGIC_AVAILABLE = True
-    print("python-magic library loaded successfully")
-except ImportError as e:
-    MAGIC_AVAILABLE = False
-    magic = None
-    print(f"python-magic library not available: {e}")
-    print("File type detection will use mimetypes fallback")
+MAGIC_AVAILABLE = False
+magic = None
+
+def get_magic_module():
+    """Lazy import of magic module with proper error handling"""
+    global magic, MAGIC_AVAILABLE
+    if MAGIC_AVAILABLE:
+        return magic
+    
+    try:
+        import magic as magic_module
+        magic = magic_module
+        MAGIC_AVAILABLE = True
+        print("python-magic library loaded successfully")
+        return magic
+    except ImportError as e:
+        print(f"python-magic library not available: {e}")
+        print("File type detection will use mimetypes fallback")
+        MAGIC_AVAILABLE = False
+        return None
+    except Exception as e:
+        print(f"Error loading python-magic: {e}")
+        print("File type detection will use mimetypes fallback")
+        MAGIC_AVAILABLE = False
+        return None
 
 # Suppress passlib bcrypt warning due to bcrypt 4.1+ compatibility issue
 # See: https://github.com/pyca/bcrypt/issues/684
@@ -2885,9 +2901,10 @@ def validate_audio_file(file: UploadFile) -> None:
 def validate_file_content(file_path: str) -> None:
     """Validate file content using magic numbers with fallback"""
     try:
-        if MAGIC_AVAILABLE and magic:
+        magic_module = get_magic_module()
+        if magic_module:
             # Use python-magic to detect actual file type
-            file_type = magic.from_file(file_path, mime=True)
+            file_type = magic_module.from_file(file_path, mime=True)
             print(f"[FileValidation] Magic detected file type: {file_type} for file: {file_path}")
             
             if file_type not in ALLOWED_AUDIO_MIMETYPES:
