@@ -2,8 +2,8 @@
 # Try Nixpacks first (preferred), fallback to Docker
 
 [build]
-builder = "NIXPACKS"
-nixpacksConfigPath = "backend/nixpacks.toml"
+builder = "DOCKERFILE"
+dockerfilePath = "backend/Dockerfile.railway"
 
 # Fallback Docker configuration (if Nixpacks fails)
 # Change builder to "DOCKERFILE" and uncomment below if needed:

@@ -1,0 +1,12 @@
+# Simple Nixpacks configuration for Railway
+providers = ["python"]
+
+[variables]
+PYTHONDONTWRITEBYTECODE = "1"
+PYTHONUNBUFFERED = "1"
+
+[phases.install]
+cmds = ["cd backend && pip install --no-cache-dir -r requirements-railway.txt"]
+
+[start]
+cmd = "cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT" 
