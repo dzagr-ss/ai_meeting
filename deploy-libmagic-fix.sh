@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-echo "🔧 Deploying LibMagic Fix for Railway"
-echo "===================================="
+echo "�� Deploying LibMagic & Dependencies Fix for Railway"
+echo "=================================================="
 
 # Check if we're in the right directory
 if [ ! -f "Dockerfile" ]; then
@@ -37,17 +37,20 @@ echo "  3. Created test-libmagic.py to diagnose issues"
 echo "  4. Created start-with-debug.sh for detailed logging"
 echo "  5. Modified main.py to use lazy loading for magic module"
 echo "  6. Fixed version pinning in requirements-railway.txt"
+echo "  7. Added missing itsdangerous and other essential dependencies"
+echo "  8. Enhanced debug script to check Python dependencies"
 
 echo ""
 echo "🚀 Ready to deploy! Push to Railway with:"
 echo "   git add ."
-echo "   git commit -m 'Fix libmagic import error in Railway deployment'"
+echo "   git commit -m 'Fix libmagic and missing dependencies for Railway deployment'"
 echo "   git push"
 
 echo ""
 echo "📊 After deployment, check the Railway logs for:"
 echo "  - LibMagic test results"
 echo "  - System package information"
+echo "  - Python dependencies status"
 echo "  - Magic library status"
 echo ""
 echo "✨ The application should now start successfully!" 

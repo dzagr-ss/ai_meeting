@@ -1,12 +1,21 @@
-# LibMagic Fix for Railway Deployment
+# LibMagic & Dependencies Fix for Railway Deployment
 
 ## Problem
-The backend was failing to start on Railway with the error:
+The backend was failing to start on Railway with multiple errors:
+
+**Initial Error:**
 ```
 ImportError: failed to find libmagic. Check your installation
 ```
 
-This error occurs because the `python-magic` library requires the system library `libmagic` to be installed, which was missing in the Railway deployment environment.
+**Secondary Error (after libmagic fix):**
+```
+ModuleNotFoundError: No module named 'itsdangerous'
+```
+
+These errors occur because:
+1. The `python-magic` library requires the system library `libmagic` to be installed
+2. Essential Python dependencies required by FastAPI/Starlette were missing from the minimal requirements file
 
 ## Solution
 
@@ -20,18 +29,23 @@ This error occurs because the `python-magic` library requires the system library
 - Added `get_magic_module()` function that handles import errors gracefully
 - Updated `validate_file_content()` to use the lazy loading approach
 
-### 3. Added Debugging Tools
+### 3. Fixed requirements-railway.txt
+- Added missing `itsdangerous` dependency (required by Starlette sessions)
+- Added other essential dependencies: `starlette`, `typing-extensions`, `click`, `h11`, `anyio`
+- Pinned python-magic version for consistency
+
+### 4. Added Debugging Tools
 - `test-libmagic.py`: Comprehensive test script to verify libmagic functionality
-- `start-with-debug.sh`: Startup script with detailed system information logging
+- `start-with-debug.sh`: Startup script with detailed system and Python environment logging
 - `deploy-libmagic-fix.sh`: Deployment helper script
 
 ## Files Modified
 
 1. **Dockerfile**: Added system dependencies and test execution
 2. **backend/main.py**: Implemented lazy loading for magic module
-3. **requirements-railway.txt**: Pinned python-magic version
+3. **requirements-railway.txt**: Added missing dependencies and pinned versions
 4. **test-libmagic.py**: New - libmagic testing script
-5. **start-with-debug.sh**: New - debug startup script
+5. **start-with-debug.sh**: New - enhanced debug startup script
 
 ## Fallback Mechanism
 
@@ -58,7 +72,7 @@ docker run -p 8000:8000 stocks-agent-test
 2. Commit and push changes:
    ```bash
    git add .
-   git commit -m "Fix libmagic import error in Railway deployment"
+   git commit -m "Fix libmagic and missing dependencies for Railway deployment"
    git push
    ```
 
@@ -76,11 +90,29 @@ If needed, rollback with:
 After deployment, you should see in the logs:
 - System package information
 - LibMagic test results
+- Python dependencies status (FastAPI, Starlette, itsdangerous, etc.)
 - "python-magic library loaded successfully" or fallback messages
 - Normal application startup
 
+## Dependencies Added
+
+### Essential Runtime Dependencies:
+- `itsdangerous==2.1.2` - Required by Starlette for session management
+- `starlette==0.27.0` - Web framework (FastAPI dependency)
+- `typing-extensions==4.8.0` - Type hints support
+- `click==8.1.7` - Command line interface (Uvicorn dependency)
+- `h11==0.14.0` - HTTP/1.1 protocol (Uvicorn dependency)
+- `anyio==3.7.1` - Async I/O support
+
+### System Dependencies:
+- `libmagic1` - Core magic library
+- `libmagic-dev` - Development headers
+- `file` - File type detection utility
+- `build-essential` - Compilation tools
+
 ## Related Issues
 
-- Issue: Railway deployment failing with libmagic ImportError
-- Root cause: Missing system library dependencies
-- Solution: Install required system packages and implement graceful fallback 
+- **Primary Issue**: Railway deployment failing with libmagic ImportError
+- **Secondary Issue**: Missing essential Python dependencies (itsdangerous, etc.)
+- **Root Cause**: Incomplete dependency specification in minimal requirements file
+- **Solution**: Install required system packages and add missing Python dependencies 

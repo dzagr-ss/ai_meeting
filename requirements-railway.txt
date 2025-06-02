@@ -9,6 +9,14 @@ pydantic==2.5.2
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
 
+# Essential dependencies
+itsdangerous==2.1.2
+starlette==0.27.0
+typing-extensions==4.8.0
+click==8.1.7
+h11==0.14.0
+anyio==3.7.1
+
 # Database
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.10

@@ -18,6 +18,19 @@ file --version || echo "file command not working"
 echo -e "\n=== Python magic test ==="
 python test-libmagic.py || echo "LibMagic test failed"
 
+echo -e "\n=== Python Dependencies Check ==="
+echo "Checking critical dependencies..."
+python -c "import sys; print('Python executable:', sys.executable)"
+python -c "import fastapi; print('FastAPI version:', fastapi.__version__)" || echo "FastAPI import failed"
+python -c "import uvicorn; print('Uvicorn version:', uvicorn.__version__)" || echo "Uvicorn import failed"
+python -c "import starlette; print('Starlette version:', starlette.__version__)" || echo "Starlette import failed"
+python -c "import itsdangerous; print('itsdangerous version:', itsdangerous.__version__)" || echo "itsdangerous import failed"
+python -c "import pydantic; print('Pydantic version:', pydantic.__version__)" || echo "Pydantic import failed"
+python -c "import sqlalchemy; print('SQLAlchemy version:', sqlalchemy.__version__)" || echo "SQLAlchemy import failed"
+
+echo -e "\n=== Installed packages ==="
+pip list | head -20
+
 echo -e "\n=== Directory contents ==="
 ls -la
 
