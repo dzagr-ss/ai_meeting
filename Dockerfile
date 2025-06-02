@@ -22,10 +22,11 @@ WORKDIR /app
 # Copy requirements and test scripts first
 COPY requirements-railway.txt .
 COPY test-libmagic.py .
+COPY test-app-startup.py .
 COPY start-with-debug.sh .
 
 # Make scripts executable
-RUN chmod +x start-with-debug.sh
+RUN chmod +x start-with-debug.sh test-libmagic.py test-app-startup.py
 
 # Install Python requirements
 RUN pip install --no-cache-dir -r requirements-railway.txt
@@ -37,6 +38,19 @@ RUN echo "=== Testing libmagic installation ===" && \
 # Copy backend application
 COPY backend/ .
 
+# Test application imports (basic test without full app)
+RUN echo "=== Testing basic imports ===" && \
+    python -c "
+import sys
+print('Testing critical imports...')
+try:
+    import fastapi, uvicorn, starlette, itsdangerous, pydantic, sqlalchemy
+    print('✅ All critical web framework imports successful')
+except Exception as e:
+    print(f'❌ Import test failed: {e}')
+    sys.exit(1)
+" || echo "Basic import test failed during build"
+
 # Create directories
 RUN mkdir -p storage logs uploads && \
     chown -R railway:railway /app
@@ -47,5 +61,5 @@ USER railway
 # Expose port
 EXPOSE $PORT
 
-# Start application with debug info
+# Start application with comprehensive debugging
 CMD ["./start-with-debug.sh"] 
