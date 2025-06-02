@@ -17,7 +17,6 @@ import tempfile
 import shutil
 import subprocess
 import uuid
-import magic
 import hashlib
 import secrets
 import concurrent.futures
@@ -28,6 +27,17 @@ from typing import List, Optional, Dict, Any, Union
 from pathlib import Path
 import re
 from urllib.parse import quote
+
+# Try to import magic with fallback
+try:
+    import magic
+    MAGIC_AVAILABLE = True
+    print("python-magic library loaded successfully")
+except ImportError as e:
+    MAGIC_AVAILABLE = False
+    magic = None
+    print(f"python-magic library not available: {e}")
+    print("File type detection will use mimetypes fallback")
 
 # Suppress passlib bcrypt warning due to bcrypt 4.1+ compatibility issue
 # See: https://github.com/pyca/bcrypt/issues/684
@@ -2873,22 +2883,48 @@ def validate_audio_file(file: UploadFile) -> None:
         )
 
 def validate_file_content(file_path: str) -> None:
-    """Validate file content using magic numbers"""
+    """Validate file content using magic numbers with fallback"""
     try:
-        # Use python-magic to detect actual file type
-        file_type = magic.from_file(file_path, mime=True)
-        print(f"[FileValidation] Magic detected file type: {file_type} for file: {file_path}")
-        
-        if file_type not in ALLOWED_AUDIO_MIMETYPES:
-            # Special handling for WebM files that might be detected differently
-            if 'webm' in file_type.lower() or file_type == 'video/webm':
-                print(f"[FileValidation] WebM file detected as {file_type}, allowing it")
-                return  # Allow WebM files even if detected as video/webm
+        if MAGIC_AVAILABLE and magic:
+            # Use python-magic to detect actual file type
+            file_type = magic.from_file(file_path, mime=True)
+            print(f"[FileValidation] Magic detected file type: {file_type} for file: {file_path}")
             
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File content does not match expected audio format. Detected: {file_type}"
-            )
+            if file_type not in ALLOWED_AUDIO_MIMETYPES:
+                # Special handling for WebM files that might be detected differently
+                if 'webm' in file_type.lower() or file_type == 'video/webm':
+                    print(f"[FileValidation] WebM file detected as {file_type}, allowing it")
+                    return  # Allow WebM files even if detected as video/webm
+                
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"File content does not match expected audio format. Detected: {file_type}"
+                )
+        else:
+            print(f"[FileValidation] Magic not available, using mimetypes fallback for: {file_path}")
+            # Fallback to mimetypes
+            guessed_type, _ = mimetypes.guess_type(file_path)
+            print(f"[FileValidation] Mimetypes guessed: {guessed_type} for file: {file_path}")
+            
+            # Check if it's a webm file by extension
+            if file_path.lower().endswith('.webm'):
+                print(f"[FileValidation] File has .webm extension, allowing it")
+                return  # Allow .webm files
+            
+            if guessed_type not in ALLOWED_AUDIO_MIMETYPES:
+                # More lenient fallback - if it's any audio type, allow it
+                if guessed_type and guessed_type.startswith('audio/'):
+                    print(f"[FileValidation] Allowing audio file with type: {guessed_type}")
+                    return
+                
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Unable to verify file type - magic library not available"
+                )
+                
+    except HTTPException:
+        # Re-raise validation errors
+        raise
     except Exception as e:
         print(f"[FileValidation] Magic detection failed: {e}")
         # If magic fails, try with mimetypes as fallback
