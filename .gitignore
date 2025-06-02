@@ -26,6 +26,8 @@ venv/
 ENV/
 .env
 .env.backup
+env.example
+.env.example
 
 # IDE
 .idea/
