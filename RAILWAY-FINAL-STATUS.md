@@ -138,7 +138,7 @@ restartPolicyMaxRetries = 3           # ✅ Reasonable retry limit
 ## 🏆 Final Deployment Steps
 
 1. **Push to Railway** ✅
-   ```bash
+```bash
    git add .
    git commit -m "Railway deployment ready - all issues fixed"
    git push
