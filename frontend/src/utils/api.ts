@@ -14,8 +14,8 @@ const getApiUrl = (): string => {
     return 'http://localhost:8000';
   }
   
-  // Production fallback (you'll need to update this with your Railway URL)
-  return 'https://your-backend-name.railway.app';
+  // Production fallback (REPLACE THIS WITH YOUR ACTUAL RAILWAY BACKEND URL)
+  return 'https://YOUR-BACKEND-NAME.railway.app';
 };
 
 // Input validation and sanitization utilities
