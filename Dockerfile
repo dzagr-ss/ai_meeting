@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     file \
     libsndfile1 \
     libsndfile1-dev \
+    ffmpeg \
     && apt-get clean && rm -rf /var/lib/apt/lists/* && \
     useradd -m railway
 
