@@ -8,6 +8,7 @@ python-multipart==0.0.6
 pydantic==2.5.2
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
+itsdangerous
 
 # Database
 sqlalchemy==2.0.23
@@ -32,3 +33,6 @@ pydub==0.25.1
 slowapi==0.1.9
 redis==3.5.3
 python-magic 
+numpy==1.24.3
+scipy
+PyJWT==2.0.0 

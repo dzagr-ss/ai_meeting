@@ -32,52 +32,10 @@ COPY requirements-railway.txt /app/requirements-railway.txt
 
 # Install Python dependencies with comprehensive error handling
 RUN python -m pip install --upgrade pip && \
-    pip install --no-cache-dir --timeout=1000 --retries=10 -r requirements-railway.txt && \
-    pip cache purge
+    pip install --no-cache-dir --timeout=1000 --retries=10 -r requirements-railway.txt
 
 # Copy all application files
 COPY . /app/
-
-# Create speaker identification file (avoid external file dependency)
-RUN cat > /app/speaker_identification.py << 'EOF'
-# Production speaker identification - no heavy dependencies
-import logging
-from typing import List, Dict, Any, Optional
-
-logger = logging.getLogger(__name__)
-
-def create_speaker_identifier():
-    """Create simplified speaker identifier for production"""
-    logger.info("Initializing production speaker identification")
-    return SimplifiedSpeakerIdentifier()
-
-class SimplifiedSpeakerIdentifier:
-    """Lightweight speaker identification for Railway deployment"""
-    
-    def __init__(self):
-        self.speaker_count = 0
-        logger.info("SimplifiedSpeakerIdentifier initialized")
-    
-    def identify_speakers(self, audio_path: str) -> List[Dict[str, Any]]:
-        """Basic speaker identification - single speaker assumed"""
-        logger.info(f"Processing audio: {audio_path}")
-        return [
-            {
-                "speaker": "Speaker_1",
-                "start": 0.0,
-                "end": 300.0,
-                "confidence": 0.85
-            }
-        ]
-    
-    def process_audio(self, audio_path: str) -> List[Dict[str, Any]]:
-        """Process audio for speaker segments"""
-        return self.identify_speakers(audio_path)
-    
-    def get_speaker_segments(self, audio_path: str) -> List[Dict[str, Any]]:
-        """Alternative method name for compatibility"""
-        return self.identify_speakers(audio_path)
-EOF
 
 # Create necessary directories with proper permissions
 RUN mkdir -p /app/storage /app/logs /app/uploads && \
