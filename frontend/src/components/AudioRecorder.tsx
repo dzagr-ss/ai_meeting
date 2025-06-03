@@ -25,7 +25,7 @@ import {
   EventAvailable,
 } from '@mui/icons-material';
 import { useAppSelector } from '../store/hooks';
-import { fetchWithAuth } from '../utils/api';
+import { fetchWithAuth, getApiUrl } from '../utils/api';
 import AudioVisualizer from './AudioVisualizer';
 
 // Define a constant for the desired audio sample rate
@@ -168,7 +168,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
         
         setLoadingStoredSummaries(true);
         try {
-            const response = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/summaries`);
+            const response = await fetchWithAuth(`${getApiUrl()}/meetings/${meetingId}/summaries`);
             
             if (response.ok) {
                 const data = await response.json();
@@ -242,7 +242,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
         if (!meetingId || !token) return;
         
         try {
-            const response = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/notes`);
+            const response = await fetchWithAuth(`${getApiUrl()}/meetings/${meetingId}/notes`);
             
             if (response.ok) {
                 const data = await response.json();
@@ -268,7 +268,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
         if (!meetingId || !token) return;
         
         try {
-            const response = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/summaries`);
+            const response = await fetchWithAuth(`${getApiUrl()}/meetings/${meetingId}/summaries`);
             
             if (response.ok) {
                 const data = await response.json();
@@ -321,7 +321,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
         if (!meetingId || !token) return;
         
         try {
-            const response = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/status`);
+            const response = await fetchWithAuth(`${getApiUrl()}/meetings/${meetingId}/status`);
             
             if (response.ok) {
                 const data = await response.json();
@@ -414,7 +414,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
         try {
             console.log('Connecting to WebSocket...');
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//localhost:8000/ws/meetings/${meetingId}/stream`;
+            const wsUrl = `${protocol}//${getApiUrl().replace(/^https?:\/\//, '')}/ws/meetings/${meetingId}/stream`;
             console.log('WebSocket URL:', wsUrl);
             
             const ws = new WebSocket(wsUrl);
@@ -778,7 +778,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
                     const formData = new FormData();
                     formData.append('audio', audioBlob, 'recording.webm');
                     
-                    fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/transcribe`, {
+                    fetchWithAuth(`${getApiUrl()}/meetings/${meetingId}/transcribe`, {
                         method: 'POST',
                         body: formData,
                     })
@@ -830,7 +830,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
         setActionItems('Identifying action items...');
         console.log('[AudioRecorder] Starting fetchSummary for meeting', meetingId);
         try {
-            const response = await fetchWithAuth(`http://localhost:8000/api/meeting/${meetingId}/summary`);
+            const response = await fetchWithAuth(`${getApiUrl()}/api/meeting/${meetingId}/summary`);
             console.log('[AudioRecorder] Summary fetch response:', response.status, response.statusText);
             const contentType = response.headers.get('content-type');
             if (!response.ok) {
@@ -924,7 +924,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
                 controller.abort();
             }, 2 * 60 * 1000); // Reduced to 2 minute timeout
             
-            const response = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/refine-speakers`, {
+            const response = await fetchWithAuth(`${getApiUrl()}/meetings/${meetingId}/refine-speakers`, {
                 method: 'POST',
                 signal: controller.signal,
             });
@@ -955,7 +955,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
                 console.log('[AudioRecorder] Also triggering direct transcriptions refresh as backup');
                 setTimeout(async () => {
                     try {
-                        const refreshResponse = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/transcriptions`);
+                        const refreshResponse = await fetchWithAuth(`${getApiUrl()}/meetings/${meetingId}/transcriptions`);
                         if (refreshResponse.ok) {
                             const refreshData = await refreshResponse.json();
                             console.log('[AudioRecorder] Direct refresh successful, got', refreshData.length, 'transcriptions');
@@ -1078,7 +1078,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
             });
 
             // Start the upload
-            xhr.open('POST', `http://localhost:8000/meetings/${meetingId}/transcribe`);
+            xhr.open('POST', `${getApiUrl()}/meetings/${meetingId}/transcribe`);
             xhr.setRequestHeader('Authorization', `Bearer ${token}`);
             xhr.send(formData);
 
@@ -1128,7 +1128,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
 
         // First, check if there are any transcriptions for this meeting
         try {
-            const transcriptionsResponse = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/transcriptions`);
+            const transcriptionsResponse = await fetchWithAuth(`${getApiUrl()}/meetings/${meetingId}/transcriptions`);
             if (transcriptionsResponse.ok) {
                 const transcriptionsData = await transcriptionsResponse.json();
                 if (!transcriptionsData || transcriptionsData.length === 0) {
@@ -1161,7 +1161,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
             
             // First, mark the meeting as ended in the database
             try {
-                const endMeetingResponse = await fetchWithAuth(`http://localhost:8000/meetings/${meetingId}/end`, {
+                const endMeetingResponse = await fetchWithAuth(`${getApiUrl()}/meetings/${meetingId}/end`, {
                     method: 'POST'
                 });
                 

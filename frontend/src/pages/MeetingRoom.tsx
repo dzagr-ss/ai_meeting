@@ -38,7 +38,7 @@ import {
 } from '@mui/icons-material';
 import { useParams } from 'react-router-dom';
 import AudioRecorder from '../components/AudioRecorder';
-import { fetchWithAuth } from '../utils/api';
+import { fetchWithAuth, getApiUrl } from '../utils/api';
 import { useAppSelector } from '../store/hooks';
 import ReactMarkdown from 'react-markdown';
 import { getSpeakerColor } from '../utils/speakerColors';
@@ -181,7 +181,7 @@ const MeetingRoom: React.FC = () => {
     
     setLoadingMeeting(true);
     try {
-      const response = await fetchWithAuth(`http://localhost:8000/meetings/`);
+      const response = await fetchWithAuth(`${getApiUrl()}/meetings/`);
       
       if (response.ok) {
         const meetings = await response.json();
@@ -231,7 +231,7 @@ const MeetingRoom: React.FC = () => {
       
       setLoadingStoredTranscriptions(true);
       try {
-        const response = await fetchWithAuth(`http://localhost:8000/meetings/${id}/transcriptions`);
+        const response = await fetchWithAuth(`${getApiUrl()}/meetings/${id}/transcriptions`);
         
         if (response.ok) {
           const data = await response.json();
@@ -307,7 +307,7 @@ const MeetingRoom: React.FC = () => {
     console.log('Refreshing stored transcriptions after speaker refinement...');
     setLoadingStoredTranscriptions(true);
     try {
-      const refreshResponse = await fetchWithAuth(`http://localhost:8000/meetings/${id}/transcriptions`);
+      const refreshResponse = await fetchWithAuth(`${getApiUrl()}/meetings/${id}/transcriptions`);
       
       if (refreshResponse.ok) {
         const data = await refreshResponse.json();

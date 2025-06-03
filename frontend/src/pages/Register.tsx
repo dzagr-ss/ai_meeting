@@ -21,7 +21,7 @@ import {
   Login as LoginIcon,
 } from '@mui/icons-material';
 import { IconButton, InputAdornment } from '@mui/material';
-import axios from 'axios';
+import api from '../utils/api';
 
 const Register: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -68,7 +68,7 @@ const Register: React.FC = () => {
     setLoading(true);
 
     try {
-      await axios.post('http://localhost:8000/users/', {
+      await api.post('/users/', {
         email: email,
         password: password,
       });

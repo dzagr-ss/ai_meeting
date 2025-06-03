@@ -23,6 +23,9 @@ const getApiUrl = (): string => {
   return 'https://aimeeting.up.railway.app';
 };
 
+// Export the API URL function for use in other components
+export { getApiUrl };
+
 // Input validation and sanitization utilities
 export const sanitizeInput = (input: string): string => {
   if (!input) return '';

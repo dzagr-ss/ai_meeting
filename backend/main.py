@@ -1200,12 +1200,17 @@ def get_meeting_transcriptions(
 
 @app.options("/meetings/{meeting_id}/transcribe")
 async def options_transcribe():
+    # Use the same origins as the main CORS middleware
+    allowed_origins = get_allowed_origins()
+    # For simplicity, return the first allowed origin (or * if multiple)
+    origin = allowed_origins[0] if len(allowed_origins) == 1 else "*"
+    
     return {
         "headers": {
-            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Methods": "POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Credentials": "false",
         }
     }
 

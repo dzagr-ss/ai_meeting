@@ -23,7 +23,7 @@ import {
   PersonAdd,
 } from '@mui/icons-material';
 import { IconButton, InputAdornment } from '@mui/material';
-import axios from 'axios';
+import api from '../utils/api';
 
 const Login: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -52,9 +52,9 @@ const Login: React.FC = () => {
     dispatch(loginStart());
 
     try {
-      const response = await axios.post('http://localhost:8000/token', {
-        email: email,
-        password,
+      const response = await api.post('/token', {
+        username: email,
+        password: password,
       });
 
       const { access_token } = response.data;

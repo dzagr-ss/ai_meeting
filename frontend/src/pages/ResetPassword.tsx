@@ -10,7 +10,7 @@ import {
   Alert,
   CircularProgress,
 } from '@mui/material';
-import axios from 'axios';
+import api from '../utils/api';
 
 const ResetPassword: React.FC = () => {
   const navigate = useNavigate();
@@ -79,7 +79,7 @@ const ResetPassword: React.FC = () => {
     }
 
     try {
-      const response = await axios.post('http://localhost:8000/password-reset/confirm', {
+      const response = await api.post('/password-reset/confirm', {
         token: token,
         new_password: formData.newPassword,
       });
