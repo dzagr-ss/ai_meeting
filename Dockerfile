@@ -6,13 +6,15 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
 
-# Install system dependencies including libmagic for python-magic
+# Install system dependencies including libmagic and libsndfile for audio processing
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    build-essential \
     libmagic1 \
     libmagic-dev \
     file \
-    build-essential \
+    libsndfile1 \
+    libsndfile1-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/* && \
     useradd -m railway
 

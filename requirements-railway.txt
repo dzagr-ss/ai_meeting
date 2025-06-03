@@ -34,14 +34,21 @@ python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 cryptography
 email-validator==2.2.0
+PyJWT==2.0.0
+
+# Core numerical and audio processing
+numpy==1.24.3
+scipy==1.11.4
+
+# Basic audio support (no heavy ML)
+pydub==0.25.1
+ffmpeg-python==0.2.0
+soundfile==0.12.1
 
 # API clients (lightweight)
 openai==1.3.5
 google-generativeai
 requests
-
-# Basic audio support (no heavy ML)
-pydub==0.25.1
 
 # Utilities
 slowapi==0.1.9

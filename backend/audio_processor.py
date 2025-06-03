@@ -1,9 +1,6 @@
 import numpy as np
-import soundfile as sf
 import io
 from typing import Generator, Optional, Tuple, List, AsyncGenerator
-import torch
-import torchaudio
 from datetime import datetime
 import asyncio
 from queue import Queue
@@ -12,6 +9,60 @@ import tempfile
 import os
 import warnings
 from config import settings
+
+# Production-safe imports for heavy ML libraries
+try:
+    import soundfile as sf
+    import torch
+    import torchaudio
+    AUDIO_ML_AVAILABLE = True
+    print("Audio ML libraries loaded - full audio processing available")
+except ImportError as e:
+    AUDIO_ML_AVAILABLE = False
+    print(f"Audio ML libraries not available: {e}")
+    print("Using lightweight audio processing mode")
+    
+    # Create minimal replacements
+    class MockSoundFile:
+        @staticmethod
+        def write(filename, data, samplerate):
+            # Fallback to basic WAV writing if needed
+            import wave
+            import struct
+            with wave.open(filename, 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)  # 16-bit
+                wav_file.setframerate(samplerate)
+                # Convert float32 to int16
+                if data.dtype == np.float32:
+                    # Ensure data is in range [-1, 1]
+                    data = np.clip(data, -1.0, 1.0)
+                    data = (data * 32767).astype(np.int16)
+                elif data.dtype != np.int16:
+                    data = data.astype(np.int16)
+                wav_file.writeframes(data.tobytes())
+    
+    class MockTorch:
+        @staticmethod
+        def from_numpy(array):
+            return MockTensor(array)
+        
+    class MockTensor:
+        def __init__(self, data):
+            self.data = data
+        def unsqueeze(self, dim):
+            return self
+    
+    class MockTorchAudio:
+        @staticmethod
+        def save(filename, tensor, sample_rate):
+            # Use mock soundfile instead
+            data = tensor.data if hasattr(tensor, 'data') else tensor
+            sf.write(filename, data, sample_rate)
+    
+    sf = MockSoundFile()
+    torch = MockTorch()
+    torchaudio = MockTorchAudio()
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
@@ -70,18 +121,27 @@ class AudioChunker:
             # Create temporary file
             chunk_file = os.path.join(self.temp_dir, f"chunk_{start_time:.2f}_{end_time:.2f}.wav")
             
-            # Convert to torch tensor for better compatibility
-            audio_tensor = torch.from_numpy(audio_data).unsqueeze(0)  # Add channel dimension
-            torchaudio.save(chunk_file, audio_tensor, self.sample_rate)
+            if AUDIO_ML_AVAILABLE:
+                # Use real torch/torchaudio for better compatibility
+                audio_tensor = torch.from_numpy(audio_data).unsqueeze(0)  # Add channel dimension
+                torchaudio.save(chunk_file, audio_tensor, self.sample_rate)
+            else:
+                # Use mock implementation (falls back to basic WAV writing)
+                sf.write(chunk_file, audio_data, self.sample_rate)
             
             return chunk_file
         except Exception as e:
             if settings.SHOW_BACKEND_LOGS:
-                print(f"Error saving chunk: {str(e)}")
-            # Fallback to soundfile if torchaudio fails
-            chunk_file = os.path.join(self.temp_dir, f"chunk_{start_time:.2f}_{end_time:.2f}.wav")
-            sf.write(chunk_file, audio_data, self.sample_rate)
-            return chunk_file
+                print(f"Error saving chunk with primary method: {str(e)}")
+            # Final fallback to soundfile
+            try:
+                chunk_file = os.path.join(self.temp_dir, f"chunk_{start_time:.2f}_{end_time:.2f}.wav")
+                sf.write(chunk_file, audio_data, self.sample_rate)
+                return chunk_file
+            except Exception as e2:
+                if settings.SHOW_BACKEND_LOGS:
+                    print(f"Error with fallback method: {str(e2)}")
+                raise e2
     
     async def process_audio_stream(self, audio_chunks: List[np.ndarray]) -> AsyncGenerator[Tuple[np.ndarray, float, float], None]:
         """Process audio stream and yield chunks based on silence and duration."""

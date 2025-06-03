@@ -83,18 +83,25 @@ import openai
 from openai import OpenAI
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
-import whisperx
-import torch
-import torchaudio
+# Removed problematic direct imports - handled by production-safe imports below
+# import whisperx
+# import torch  
+# import torchaudio
 from pydub import AudioSegment
 import numpy as np
-import librosa
-import soundfile as sf
+# import librosa
+# import soundfile as sf
 from scipy.signal import butter, filtfilt
-import noisereduce as nr
+# import noisereduce as nr
+
 # Production-safe imports
 try:
     import whisperx
+    import torch
+    import torchaudio
+    import librosa
+    import soundfile as sf
+    import noisereduce as nr
     from pyannote.audio import Pipeline
     from pyannote.core import Segment
     HEAVY_ML_AVAILABLE = True
@@ -114,11 +121,22 @@ except ImportError as e:
             self.start = start
             self.end = end
     
+    class MockTorch:
+        def load(self, *args, **kwargs):
+            return {}
+        def save(self, *args, **kwargs):
+            pass
+    
     whisperx = None
+    torch = MockTorch()
+    torchaudio = None
+    librosa = None
+    sf = None
+    nr = None
     Pipeline = MockPipeline
     Segment = MockSegment
 
-from pyannote.core import Segment
+# from pyannote.core import Segment  # Duplicate import - handled above in production-safe imports
 
 # Import local modules
 from database import get_db, engine, SessionLocal
