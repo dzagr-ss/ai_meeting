@@ -8,11 +8,6 @@ const getApiUrl = (): string => {
   if (process.env.REACT_APP_API_URL) {
     return process.env.REACT_APP_API_URL;
   }
-  
-  console.log('API URL:', getApiUrl());
-  console.log('REACT_APP_API_URL env var:', process.env.REACT_APP_API_URL);
-  console.log('NODE_ENV:', process.env.NODE_ENV);
-
 
   // Development fallback
   if (process.env.NODE_ENV === 'development') {
@@ -168,10 +163,13 @@ const api = axios.create({
   withCredentials: false, // Disable credentials for security
 });
 
-// Log the API URL for debugging (only in development)
-if (process.env.NODE_ENV === 'development') {
-  console.log('API URL:', getApiUrl());
-}
+// Debug logs - Always show in production for troubleshooting
+console.log('🔧 DEBUG: API Configuration');
+console.log('API URL being used:', getApiUrl());
+console.log('REACT_APP_API_URL env var:', process.env.REACT_APP_API_URL);
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('Axios baseURL:', api.defaults.baseURL);
+console.log('All REACT_APP env vars:', Object.keys(process.env).filter(key => key.startsWith('REACT_APP')));
 
 // Request interceptor to add auth token and validate requests
 api.interceptors.request.use(
