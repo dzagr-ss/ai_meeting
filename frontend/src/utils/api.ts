@@ -13,9 +13,13 @@ const getApiUrl = (): string => {
   if (process.env.NODE_ENV === 'development') {
     return 'http://localhost:8000';
   }
+
+  console.log('API URL:', getApiUrl());
+  console.log('REACT_APP_API_URL env var:', process.env.REACT_APP_API_URL);
+  console.log('NODE_ENV:', process.env.NODE_ENV);
   
   // Production fallback (REPLACE THIS WITH YOUR ACTUAL RAILWAY BACKEND URL)
-  return 'https://YOUR-BACKEND-NAME.railway.app';
+  return 'https://aimeeting.up.railway.app';
 };
 
 // Input validation and sanitization utilities
