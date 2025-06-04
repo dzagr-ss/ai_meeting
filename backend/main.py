@@ -487,19 +487,22 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 
 # Dependency
 def get_db():
+    """Database dependency with improved error handling"""
+    db = None
     try:
         db = SessionLocal()
         yield db
     except Exception as e:
         print(f"[Database] Error creating database session: {e}")
-        # For health checks and basic endpoints, we can continue without DB
+        # For non-critical endpoints, we can continue without DB
+        # But for user registration, we need to fail gracefully
         yield None
     finally:
-        try:
-            if 'db' in locals():
+        if db:
+            try:
                 db.close()
-        except:
-            pass
+            except Exception as close_error:
+                print(f"[Database] Error closing database session: {close_error}")
 
 # Use settings object for API keys
 GEMINI_API_KEY = settings.GEMINI_API_KEY
@@ -1057,24 +1060,46 @@ async def get_file_structure(
 @app.post("/users/", response_model=schemas.User)
 @limiter.limit("5/minute")
 async def create_user(request: Request, user: schemas.UserCreate, db: Session = Depends(get_db)):
+    # Check if database is available
+    if db is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable. Please try again later."
+        )
+    
     # Get client IP for logging
     client_ip = request.client.host
     if "x-forwarded-for" in request.headers:
         client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
     
-    db_user = crud.get_user_by_email(db, email=user.email)
-    if db_user:
-        log_security_event("user_registration_attempt_duplicate", ip_address=client_ip, details={
-            "email": user.email
+    try:
+        # Check if user already exists
+        db_user = crud.get_user_by_email(db, email=user.email)
+        if db_user:
+            log_security_event("user_registration_attempt_duplicate", ip_address=client_ip, details={
+                "email": user.email
+            })
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Create new user
+        new_user = crud.create_user(db=db, user=user)
+        log_audit_event("user_created", new_user.id, "user", new_user.id, {
+            "email": user.email,
+            "ip_address": client_ip
         })
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    new_user = crud.create_user(db=db, user=user)
-    log_audit_event("user_created", new_user.id, "user", new_user.id, {
-        "email": user.email,
-        "ip_address": client_ip
-    })
-    return new_user
+        return new_user
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        print(f"[UserCreation] Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create user account. Please try again later."
+        )
 
 @app.post("/token")
 @limiter.limit("10/minute")
@@ -3174,7 +3199,7 @@ async def save_uploaded_file_securely(file: UploadFile, destination_dir: str) ->
 # Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Global exception handler to prevent information disclosure"""
+    """Global exception handler to prevent information disclosure and ensure CORS headers"""
     
     # Log the full error for debugging
     app_logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
@@ -3186,8 +3211,8 @@ async def global_exception_handler(request: Request, exc: Exception):
         "error_type": type(exc).__name__
     })
     
-    # Return generic error message to prevent information disclosure
-    return JSONResponse(
+    # Create response with generic error message
+    response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
             "error": "Internal server error",
@@ -3195,6 +3220,21 @@ async def global_exception_handler(request: Request, exc: Exception):
             "error_id": str(uuid.uuid4())  # Unique error ID for tracking
         }
     )
+    
+    # Ensure CORS headers are included even for 500 errors
+    try:
+        # Get the origin from the request
+        origin = request.headers.get("origin")
+        if origin:
+            allowed_origins = get_allowed_origins()
+            if origin in allowed_origins or "*" in allowed_origins:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
+                response.headers["Vary"] = "Origin"
+    except Exception as cors_error:
+        print(f"Error adding CORS headers to exception response: {cors_error}")
+    
+    return response
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
