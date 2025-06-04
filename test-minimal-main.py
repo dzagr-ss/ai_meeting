@@ -45,20 +45,48 @@ except Exception as e:
 
 # Create minimal FastAPI app
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="Minimal Test API",
-    description="Minimal test API for Railway debugging",
+    description="Minimal test API for Railway debugging with CORS support",
     version="1.0.0"
 )
 
 print("✅ FastAPI app created")
 
+# Add CORS middleware to solve the original issue
+allowed_origins = [
+    "https://ai-meeting-indol.vercel.app",  # Vercel frontend
+    "http://localhost:3000",  # Local development
+    "http://127.0.0.1:3000",  # Local development
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Accept",
+        "Accept-Language", 
+        "Content-Language",
+        "Content-Type",
+        "Authorization",
+        "X-Requested-With",
+        "Cache-Control"
+    ],
+    expose_headers=["X-Total-Count"],
+    max_age=600,  # Cache preflight for 10 minutes
+)
+
+print(f"✅ CORS middleware added with origins: {allowed_origins}")
+
 # Add ultra-simple health check endpoints
 @app.get("/health")
 async def health_check():
     """Ultra-simple health check endpoint"""
-    return {"status": "ok", "message": "minimal test api working"}
+    return {"status": "ok", "message": "minimal test api working with CORS"}
 
 @app.get("/healthz")  
 async def health_check_alt():
@@ -74,13 +102,25 @@ async def ping():
 async def root():
     """Root endpoint"""
     return {
-        "message": "Minimal Test API",
+        "message": "Minimal Test API with CORS",
         "status": "healthy",
         "python_version": sys.version,
-        "environment": os.getenv("ENVIRONMENT", "unknown")
+        "environment": os.getenv("ENVIRONMENT", "unknown"),
+        "cors_enabled": True,
+        "allowed_origins": allowed_origins
     }
 
-print("✅ All endpoints registered")
+# Add a test endpoint for CORS testing
+@app.post("/test-cors")
+async def test_cors():
+    """Test endpoint for CORS functionality"""
+    return {
+        "message": "CORS test successful",
+        "method": "POST",
+        "timestamp": "2025-06-04T20:52:00Z"
+    }
+
+print("✅ All endpoints registered with CORS support")
 
 if __name__ == "__main__":
     print("=== Starting Uvicorn Server ===")
