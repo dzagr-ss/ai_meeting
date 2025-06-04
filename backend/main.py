@@ -3781,48 +3781,6 @@ def cleanup_meeting_audio_files(meeting_id: int, user_email: str) -> dict:
         }
 
 # Debug middleware to catch 400 errors
-@app.middleware("http")
-async def debug_requests(request: Request, call_next):
-    try:
-        # Skip middleware processing for health check endpoints
-        if request.url.path in ["/health", "/healthz", "/ping"]:
-            # Let health checks pass through without any processing
-            from fastapi.responses import JSONResponse
-            if request.url.path == "/health":
-                return JSONResponse({"status": "ok", "service": "meeting-transcription-api"})
-            elif request.url.path == "/healthz":
-                return JSONResponse({"alive": True, "ready": True})
-            elif request.url.path == "/ping":
-                return JSONResponse("pong")
-        
-        response = await call_next(request)
-        
-        # Log 400 errors for debugging
-        if response.status_code == 400:
-            print(f"[DEBUG] 400 Error on {request.method} {request.url.path}")
-            print(f"[DEBUG] Headers: {dict(request.headers)}")
-            print(f"[DEBUG] Query params: {dict(request.query_params)}")
-        
-        return response
-    except Exception as e:
-        print(f"[DEBUG] Exception in debug middleware: {e}")
-        # Return a simple 200 response for health checks
-        if request.url.path in ["/health", "/healthz", "/ping"]:
-            from fastapi.responses import JSONResponse
-            if request.url.path == "/health":
-                return JSONResponse({"status": "ok", "service": "meeting-transcription-api"})
-            elif request.url.path == "/healthz":
-                return JSONResponse({"alive": True, "ready": True})
-            elif request.url.path == "/ping":
-                return JSONResponse("pong")
-        raise
-
-# Security headers middleware
-@app.middleware("http")
-async def enforce_https_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
-    return response
 
 if __name__ == "__main__":
     # Load environment variables from .env file
