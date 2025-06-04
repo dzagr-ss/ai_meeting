@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     
     # CORS - Secure defaults with production environment support
     BACKEND_CORS_ORIGINS: str = Field(
-        default="http://localhost:3000", 
+        default="https://ai-meeting-indol.vercel.app,http://localhost:3000", 
         description="Comma-separated list of allowed CORS origins"
     )
     
