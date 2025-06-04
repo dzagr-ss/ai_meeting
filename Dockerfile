@@ -38,12 +38,15 @@ RUN pip install --no-cache-dir -r requirements-railway.txt
 RUN echo "=== Testing libmagic installation ===" && \
     python test-libmagic.py || echo "LibMagic test failed during build"
 
-# Copy backend application
-COPY backend/ .
+# Copy minimal test version for debugging
+COPY test-minimal-main.py .
+
+# Copy backend application (commented out for minimal test)
+# COPY backend/ .
 
 # Test application imports (basic test without full app)
-RUN echo "=== Testing basic imports ===" && \
-    python -c "import sys; print('Testing critical imports...'); import fastapi, uvicorn, starlette, itsdangerous, pydantic, sqlalchemy; print('✅ All critical web framework imports successful')" || echo "Basic import test failed during build"
+RUN echo "=== Testing minimal app imports ===" && \
+    python -c "import sys; print('Testing minimal imports...'); import fastapi, uvicorn; print('✅ Minimal imports successful')" || echo "Minimal import test failed during build"
 
 # Create directories
 RUN mkdir -p storage logs uploads && \

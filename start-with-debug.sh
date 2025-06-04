@@ -44,16 +44,16 @@ import traceback
 import os
 
 try:
-    print('Configuring uvicorn server...')
+    print('Configuring uvicorn server for minimal test...')
     
     # Get port from environment
     port = int(os.environ.get('PORT', 8000))
     print(f'Port: {port}')
     
     # Start the server with comprehensive logging
-    print('Starting uvicorn server...')
+    print('Starting minimal test server...')
     uvicorn.run(
-        'main:app', 
+        'test-minimal-main:app', 
         host='0.0.0.0', 
         port=port, 
         log_level='info',
@@ -64,7 +64,7 @@ except KeyboardInterrupt:
     print('Server shutdown requested')
     sys.exit(0)
 except Exception as e:
-    print('❌ Uvicorn startup failed:')
+    print('❌ Minimal test server startup failed:')
     print(f'Error type: {type(e).__name__}')
     print(f'Error message: {str(e)}')
     print('Full traceback:')
