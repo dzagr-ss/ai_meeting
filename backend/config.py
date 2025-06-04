@@ -1,4 +1,11 @@
-from pydantic_settings import BaseSettings
+# Compatible imports for both Pydantic v1 and v2
+try:
+    # Pydantic v2 import
+    from pydantic_settings import BaseSettings
+except ImportError:
+    # Pydantic v1 fallback
+    from pydantic import BaseSettings
+
 from pydantic import Field, validator
 from typing import Optional, List
 import os
