@@ -286,7 +286,6 @@ limiter = Limiter(
     default_limits=["1000/day", "100/hour"]  # Global default limits
 )
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Custom rate limit handler with better error messages
 @app.exception_handler(RateLimitExceeded)
