@@ -82,8 +82,21 @@ import redis
 from pydantic import BaseModel, EmailStr, validator, ValidationError
 import openai
 from openai import OpenAI
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+# Production-safe imports for AI libraries
+try:
+    import google.generativeai as genai
+    from google.generativeai.types import HarmCategory, HarmBlockThreshold
+    GEMINI_AVAILABLE = True
+    print("Google Generative AI library loaded successfully")
+except ImportError as e:
+    print(f"Google Generative AI library not available: {e}")
+    print("Gemini AI features will be disabled")
+    GEMINI_AVAILABLE = False
+    genai = None
+    HarmCategory = None
+    HarmBlockThreshold = None
+
 # Removed problematic direct imports - handled by production-safe imports below
 # import whisperx
 # import torch  
@@ -505,7 +518,7 @@ def get_db():
                 print(f"[Database] Error closing database session: {close_error}")
 
 # Use settings object for API keys
-GEMINI_API_KEY = settings.GEMINI_API_KEY
+GEMINI_API_KEY = settings.GEMINI_API_KEY if GEMINI_AVAILABLE else None
 
 # Suppress Whisper FP16 warning
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead", module="whisper.transcribe")
@@ -2071,11 +2084,11 @@ async def get_meeting_summary(
         await process_uploaded_audio_files(meeting_id, audio_files, db)
         
         # Check if Gemini API key is available
-        if GEMINI_API_KEY and GEMINI_API_KEY != "your-gemini-api-key-here":
+        if GEMINI_AVAILABLE and GEMINI_API_KEY and GEMINI_API_KEY != "your-gemini-api-key-here":
             # Generate summary and meeting notes with Gemini
             structured_content = summarize_with_gemini_multiple_files(audio_files)
         else:
-            print("[Summary] Gemini API key not configured, using OpenAI for summary generation")
+            print("[Summary] Gemini not available or API key not configured, using OpenAI for summary generation")
             # Fallback to OpenAI for summary generation
             structured_content = await generate_summary_with_openai(meeting_id, db)
         
@@ -2259,6 +2272,9 @@ def get_meeting_audio_files(meeting_id: int, user_email: str) -> List[str]:
     return valid_files
 
 def summarize_with_gemini_multiple_files(audio_files: List[str]) -> dict:
+    if not GEMINI_AVAILABLE:
+        raise RuntimeError("Google Generative AI library is not available. Please install it or use OpenAI fallback.")
+    
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not set in environment.")
     
@@ -2377,6 +2393,9 @@ Files processed: {file_list}"""
     }
 
 def summarize_with_gemini(wav_path: str) -> str:
+    if not GEMINI_AVAILABLE:
+        raise RuntimeError("Google Generative AI library is not available. Please install it or use OpenAI fallback.")
+    
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not set in environment.")
     # Read the audio file and encode as base64
