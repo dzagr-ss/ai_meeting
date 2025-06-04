@@ -135,12 +135,13 @@ async def token_endpoint():
 async def get_meetings():
     """Basic meetings list endpoint - returns array directly"""
     # Return an empty array directly (what frontend expects)
-    return []
+    meetings = []
+    return meetings
 
 @app.post("/meetings/")
 async def create_meeting():
     """Basic meeting creation endpoint"""
-    return {
+    meeting = {
         "id": 1,
         "title": "Test Meeting",
         "status": "active",
@@ -148,13 +149,15 @@ async def create_meeting():
         "owner_id": 1,
         "is_ended": False
     }
+    return meeting
 
 # Add basic tags endpoint
 @app.get("/tags/")
 async def get_tags():
     """Basic tags list endpoint - returns array directly"""
     # Return an empty array directly (what frontend expects)
-    return []
+    tags = []
+    return tags
 
 print("✅ All endpoints registered with CORS support")
 
