@@ -439,7 +439,29 @@ app.add_middleware(
 )
 
 # Security headers middleware
-allowed_hosts = ["*"] if not is_production else get_allowed_origins()
+def get_allowed_hosts():
+    """Get allowed hosts for TrustedHostMiddleware"""
+    if not is_production:
+        return ["*"]  # Allow all in development
+    
+    # In production, allow specific hosts
+    allowed_hosts = [
+        "aimeeting.up.railway.app",  # Railway domain
+        "localhost",  # For health checks
+        "127.0.0.1",  # For health checks
+    ]
+    
+    # Add any additional hosts from environment
+    additional_hosts = os.getenv("ALLOWED_HOSTS", "")
+    if additional_hosts:
+        hosts = [host.strip() for host in additional_hosts.split(",") if host.strip()]
+        allowed_hosts.extend(hosts)
+    
+    return allowed_hosts
+
+allowed_hosts = get_allowed_hosts()
+app_logger.info(f"Allowed hosts: {allowed_hosts}")
+
 app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=allowed_hosts
