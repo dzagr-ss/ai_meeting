@@ -256,8 +256,11 @@ async def log_requests(request: Request, call_next):
 
 # Create database tables
 try:
-    models.Base.metadata.create_all(bind=engine)
-    print("[Database] Database tables created successfully")
+    if hasattr(models, 'Base') and models.Base and engine:
+        models.Base.metadata.create_all(bind=engine)
+        print("[Database] Database tables created successfully")
+    else:
+        print("[Database] Skipping table creation - engine not available")
 except Exception as db_error:
     print(f"[Database] Warning: Could not create database tables: {db_error}")
     print("[Database] Application will continue but database features may not work")

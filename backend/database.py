@@ -34,8 +34,15 @@ if "postgresql" in SQLALCHEMY_DATABASE_URL and "@localhost" not in SQLALCHEMY_DA
         "sslrootcert": settings.DB_SSL_ROOT_CERT if hasattr(settings, 'DB_SSL_ROOT_CERT') else None,
     })
 
-# Create engine with security configuration
-engine = create_engine(SQLALCHEMY_DATABASE_URL, **engine_config)
+# Create engine with security configuration and error handling
+try:
+    engine = create_engine(SQLALCHEMY_DATABASE_URL, **engine_config)
+    print(f"[Database] Engine created successfully for URL: {SQLALCHEMY_DATABASE_URL[:50]}...")
+except Exception as engine_error:
+    print(f"[Database] Warning: Could not create database engine: {engine_error}")
+    print(f"[Database] Database URL: {SQLALCHEMY_DATABASE_URL[:50]}...")
+    # Create a dummy engine that will fail gracefully for health checks
+    engine = None
 
 # Add query logging for security monitoring
 @event.listens_for(engine, "before_cursor_execute")
@@ -103,12 +110,17 @@ def receive_after_cursor_execute(conn, cursor, statement, parameters, context, e
         db_logger.warning(f"Slow query detected ({total:.2f}s): {statement[:100]}...")
 
 # Session configuration with security considerations
-SessionLocal = sessionmaker(
-    autocommit=False, 
-    autoflush=False, 
-    bind=engine,
-    expire_on_commit=False  # Prevent lazy loading issues
-)
+if engine:
+    SessionLocal = sessionmaker(
+        autocommit=False, 
+        autoflush=False, 
+        bind=engine,
+        expire_on_commit=False  # Prevent lazy loading issues
+    )
+    print("[Database] SessionLocal created successfully")
+else:
+    SessionLocal = None
+    print("[Database] SessionLocal not created due to engine failure")
 
 Base = declarative_base()
 
@@ -116,6 +128,11 @@ def get_db():
     """
     Database dependency with proper error handling and logging
     """
+    if not SessionLocal:
+        print("[Database] SessionLocal not available, database connection failed")
+        yield None
+        return
+        
     db = SessionLocal()
     try:
         # Test connection
