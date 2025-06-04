@@ -130,6 +130,36 @@ async def token_endpoint():
         "message": "This is a test token endpoint. Full authentication available in complete application."
     }
 
+# Add basic meetings endpoints
+@app.get("/meetings/")
+async def get_meetings():
+    """Basic meetings list endpoint"""
+    return {
+        "meetings": [],
+        "message": "Meetings endpoint available - full functionality in complete application",
+        "count": 0
+    }
+
+@app.post("/meetings/")
+async def create_meeting():
+    """Basic meeting creation endpoint"""
+    return {
+        "id": 1,
+        "title": "Test Meeting",
+        "message": "Meeting creation endpoint available - full functionality in complete application",
+        "created_at": "2025-06-04T21:20:00Z"
+    }
+
+# Add basic tags endpoint
+@app.get("/tags/")
+async def get_tags():
+    """Basic tags list endpoint"""
+    return {
+        "tags": [],
+        "message": "Tags endpoint available - full functionality in complete application",
+        "count": 0
+    }
+
 print("✅ All endpoints registered with CORS support")
 
 if __name__ == "__main__":
