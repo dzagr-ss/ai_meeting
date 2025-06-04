@@ -120,6 +120,16 @@ async def test_cors():
         "timestamp": "2025-06-04T20:52:00Z"
     }
 
+# Add basic token endpoint for authentication
+@app.post("/token")
+async def token_endpoint():
+    """Basic token endpoint for testing authentication"""
+    return {
+        "access_token": "test_token_for_development",
+        "token_type": "bearer",
+        "message": "This is a test token endpoint. Full authentication available in complete application."
+    }
+
 print("✅ All endpoints registered with CORS support")
 
 if __name__ == "__main__":
