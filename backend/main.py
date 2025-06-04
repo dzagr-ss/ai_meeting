@@ -65,6 +65,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.exceptions import RequestValidationError
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -78,7 +79,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 import redis
-from pydantic import BaseModel, EmailStr, validator
+from pydantic import BaseModel, EmailStr, validator, ValidationError
 import openai
 from openai import OpenAI
 import google.generativeai as genai
@@ -3262,18 +3263,103 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         }
     )
 
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle FastAPI request validation errors with proper CORS headers"""
+    
+    # Log validation error for debugging
+    app_logger.warning(f"Request validation error on {request.method} {request.url.path}: {exc}")
+    
+    # Extract user-friendly error messages
+    error_details = []
+    for error in exc.errors():
+        field = " -> ".join(str(loc) for loc in error["loc"])
+        message = error["msg"]
+        error_details.append(f"{field}: {message}")
+    
+    # Create response with validation error details
+    response = JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error": "Validation Error",
+            "detail": "The provided data failed validation",
+            "validation_errors": exc.errors(),
+            "user_friendly_errors": error_details
+        }
+    )
+    
+    # Ensure CORS headers are included
+    try:
+        origin = request.headers.get("origin")
+        if origin:
+            allowed_origins = get_allowed_origins()
+            if origin in allowed_origins or "*" in allowed_origins:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
+                response.headers["Vary"] = "Origin"
+    except Exception as cors_error:
+        print(f"Error adding CORS headers to request validation response: {cors_error}")
+    
+    return response
+
+@app.exception_handler(ValidationError)
+async def validation_exception_handler(request: Request, exc: ValidationError):
+    """Handle Pydantic validation errors with proper CORS headers"""
+    
+    # Log validation error for debugging
+    app_logger.warning(f"Validation error on {request.method} {request.url.path}: {exc}")
+    
+    # Create response with validation error details
+    response = JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error": "Validation Error",
+            "detail": "The provided data failed validation",
+            "validation_errors": exc.errors()
+        }
+    )
+    
+    # Ensure CORS headers are included
+    try:
+        origin = request.headers.get("origin")
+        if origin:
+            allowed_origins = get_allowed_origins()
+            if origin in allowed_origins or "*" in allowed_origins:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
+                response.headers["Vary"] = "Origin"
+    except Exception as cors_error:
+        print(f"Error adding CORS headers to validation response: {cors_error}")
+    
+    return response
+
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError):
-    """Handle validation errors"""
+    """Handle validation errors with proper CORS headers"""
     app_logger.warning(f"Validation error: {str(exc)}")
     
-    return JSONResponse(
+    # Create response
+    response = JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={
             "error": "Validation error",
             "detail": str(exc)
         }
     )
+    
+    # Ensure CORS headers are included
+    try:
+        origin = request.headers.get("origin")
+        if origin:
+            allowed_origins = get_allowed_origins()
+            if origin in allowed_origins or "*" in allowed_origins:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
+                response.headers["Vary"] = "Origin"
+    except Exception as cors_error:
+        print(f"Error adding CORS headers to value error response: {cors_error}")
+    
+    return response
 
 @app.exception_handler(PermissionError)
 async def permission_error_handler(request: Request, exc: PermissionError):
