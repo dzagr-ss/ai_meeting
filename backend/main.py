@@ -3780,7 +3780,6 @@ def cleanup_meeting_audio_files(meeting_id: int, user_email: str) -> dict:
             "error": str(e)
         }
 
-# Debug middleware to catch 400 errors
 
 if __name__ == "__main__":
     # Load environment variables from .env file
