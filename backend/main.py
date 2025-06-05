@@ -377,6 +377,21 @@ async def ping():
     """Simple ping endpoint"""
     return "pong"
 
+@app.get("/test-full-implementation")
+async def test_full_implementation():
+    """Test endpoint to confirm full implementation is deployed"""
+    return {
+        "message": "Full implementation deployed successfully",
+        "timestamp": datetime.utcnow().isoformat(),
+        "features": {
+            "whisperx": HEAVY_ML_AVAILABLE,
+            "genai": GENAI_AVAILABLE,
+            "database": DATABASE_AVAILABLE,
+            "email": EMAIL_AVAILABLE,
+            "speaker_id": SPEAKER_ID_AVAILABLE
+        }
+    }
+
 # Rate limiter setup with Redis backend for production
 limiter = Limiter(
     key_func=get_remote_address,
