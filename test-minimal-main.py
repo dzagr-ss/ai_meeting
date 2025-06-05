@@ -358,6 +358,171 @@ for route in app.routes:
     print(f"Route: {route.path} | Methods: {getattr(route, 'methods', 'N/A')} | Name: {getattr(route, 'name', 'N/A')}")
 print("========================\n")
 
+# Add missing critical endpoints after the existing meeting endpoints
+
+# Meeting update endpoint - CRITICAL for tag management
+@app.put("/meetings/{meeting_id}")
+async def update_meeting(meeting_id: int, request: Request):
+    """Update meeting details including tags"""
+    auth_header = request.headers.get("authorization", "")
+    print(f"[DEBUG] PUT /meetings/{meeting_id} - Auth header: {auth_header[:50]}..." if auth_header else f"[DEBUG] PUT /meetings/{meeting_id} - No auth header")
+    
+    try:
+        # Get the request body
+        body = await request.json()
+        print(f"[DEBUG] PUT /meetings/{meeting_id} - Request body: {body}")
+        
+        # Mock update - in real implementation this would update the database
+        updated_meeting = {
+            "id": meeting_id,
+            "title": body.get("title", "Test Meeting"),
+            "description": body.get("description", None),
+            "start_time": "2025-06-04T21:20:00Z",
+            "end_time": None,
+            "status": body.get("status", "scheduled"),
+            "tags": []  # Frontend will handle tag updates separately
+        }
+        
+        # If tag_ids are provided, mock the tag relationship
+        if "tag_ids" in body:
+            tag_ids = body["tag_ids"]
+            print(f"[DEBUG] PUT /meetings/{meeting_id} - Updating tags: {tag_ids}")
+            # Mock tags - in real implementation this would fetch from database
+            updated_meeting["tags"] = [
+                {"id": tag_id, "name": f"Tag {tag_id}", "color": "#6366f1", "created_at": "2025-06-04T21:20:00Z"}
+                for tag_id in tag_ids
+            ]
+        
+        print(f"[DEBUG] PUT /meetings/{meeting_id} - Returning updated meeting: {updated_meeting}")
+        return updated_meeting
+        
+    except Exception as e:
+        print(f"[DEBUG] PUT /meetings/{meeting_id} - Error: {e}")
+        return {"error": "Failed to update meeting", "message": str(e)}
+
+# Meeting deletion endpoint - CRITICAL for dashboard functionality
+@app.delete("/meetings/{meeting_id}")
+async def delete_meeting(meeting_id: int, request: Request):
+    """Delete a meeting"""
+    auth_header = request.headers.get("authorization", "")
+    print(f"[DEBUG] DELETE /meetings/{meeting_id} - Auth header: {auth_header[:50]}..." if auth_header else f"[DEBUG] DELETE /meetings/{meeting_id} - No auth header")
+    
+    # Mock successful deletion
+    print(f"[DEBUG] DELETE /meetings/{meeting_id} - Meeting deleted successfully")
+    return {"message": "Meeting deleted successfully"}
+
+# Tag creation endpoint - CRITICAL for TagManager
+@app.post("/tags/")
+async def create_tag(request: Request):
+    """Create a new tag"""
+    auth_header = request.headers.get("authorization", "")
+    print(f"[DEBUG] POST /tags/ - Auth header: {auth_header[:50]}..." if auth_header else "[DEBUG] POST /tags/ - No auth header")
+    
+    try:
+        body = await request.json()
+        tag_name = body.get("name", "")
+        
+        if not tag_name.strip():
+            return {"error": "Tag name is required"}, 400
+        
+        # Mock tag creation
+        new_tag = {
+            "id": int(time.time()) % 10000,  # Mock ID
+            "name": tag_name.strip(),
+            "color": "#6366f1",  # Default color
+            "created_at": "2025-06-04T21:20:00Z"
+        }
+        
+        print(f"[DEBUG] POST /tags/ - Created tag: {new_tag}")
+        return new_tag
+        
+    except Exception as e:
+        print(f"[DEBUG] POST /tags/ - Error: {e}")
+        return {"error": "Failed to create tag", "message": str(e)}
+
+# Tag update endpoint
+@app.put("/tags/{tag_id}")
+async def update_tag(tag_id: int, request: Request):
+    """Update a tag"""
+    auth_header = request.headers.get("authorization", "")
+    print(f"[DEBUG] PUT /tags/{tag_id} - Auth header: {auth_header[:50]}..." if auth_header else f"[DEBUG] PUT /tags/{tag_id} - No auth header")
+    
+    try:
+        body = await request.json()
+        updated_tag = {
+            "id": tag_id,
+            "name": body.get("name", f"Tag {tag_id}"),
+            "color": body.get("color", "#6366f1"),
+            "created_at": "2025-06-04T21:20:00Z"
+        }
+        
+        print(f"[DEBUG] PUT /tags/{tag_id} - Updated tag: {updated_tag}")
+        return updated_tag
+        
+    except Exception as e:
+        print(f"[DEBUG] PUT /tags/{tag_id} - Error: {e}")
+        return {"error": "Failed to update tag", "message": str(e)}
+
+# Tag deletion endpoint  
+@app.delete("/tags/{tag_id}")
+async def delete_tag(tag_id: int, request: Request):
+    """Delete a tag"""
+    auth_header = request.headers.get("authorization", "")
+    print(f"[DEBUG] DELETE /tags/{tag_id} - Auth header: {auth_header[:50]}..." if auth_header else f"[DEBUG] DELETE /tags/{tag_id} - No auth header")
+    
+    print(f"[DEBUG] DELETE /tags/{tag_id} - Tag deleted successfully")
+    return {"message": "Tag deleted successfully"}
+
+# Meeting end endpoint
+@app.post("/meetings/{meeting_id}/end")
+async def end_meeting(meeting_id: int, request: Request):
+    """End a meeting"""
+    auth_header = request.headers.get("authorization", "")
+    print(f"[DEBUG] POST /meetings/{meeting_id}/end - Auth header: {auth_header[:50]}..." if auth_header else f"[DEBUG] POST /meetings/{meeting_id}/end - No auth header")
+    
+    return {
+        "message": "Meeting marked as ended successfully",
+        "meeting_id": meeting_id,
+        "end_time": "2025-06-04T21:20:00Z",
+        "status": "completed"
+    }
+
+# Alternative tag addition endpoint
+@app.post("/meetings/{meeting_id}/tags")
+async def add_tags_to_meeting(meeting_id: int, request: Request):
+    """Add tags to a meeting"""
+    auth_header = request.headers.get("authorization", "")
+    print(f"[DEBUG] POST /meetings/{meeting_id}/tags - Auth header: {auth_header[:50]}..." if auth_header else f"[DEBUG] POST /meetings/{meeting_id}/tags - No auth header")
+    
+    try:
+        body = await request.json()
+        tag_names = body if isinstance(body, list) else body.get("tag_names", [])
+        
+        print(f"[DEBUG] POST /meetings/{meeting_id}/tags - Adding tags: {tag_names}")
+        
+        return {
+            "message": "Tags added successfully", 
+            "tags": tag_names
+        }
+        
+    except Exception as e:
+        print(f"[DEBUG] POST /meetings/{meeting_id}/tags - Error: {e}")
+        return {"error": "Failed to add tags", "message": str(e)}
+
+# User profile endpoint
+@app.get("/users/me")
+async def get_current_user(request: Request):
+    """Get current user profile"""
+    auth_header = request.headers.get("authorization", "")
+    print(f"[DEBUG] GET /users/me - Auth header: {auth_header[:50]}..." if auth_header else "[DEBUG] GET /users/me - No auth header")
+    
+    return {
+        "id": 1,
+        "email": "test@example.com",
+        "username": "testuser",
+        "created_at": "2025-06-04T21:20:00Z"
+    }
+
 if __name__ == "__main__":
     print("=== Starting Uvicorn Server ===")
     
