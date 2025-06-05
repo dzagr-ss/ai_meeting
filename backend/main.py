@@ -351,6 +351,8 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Full-featured implementation restored - June 5, 2025
+
 # Add ultra-simple health check endpoints FIRST, before any middleware
 @app.get("/health")
 async def health_check():
