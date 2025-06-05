@@ -418,11 +418,16 @@ async def websocket_test():
     """Test endpoint to verify WebSocket routes are working"""
     return {"message": "WebSocket routing is working", "available_endpoints": ["/ws/meetings/{meeting_id}/stream"]}
 
-# Add WebSocket endpoint for audio streaming - IMPROVED ERROR HANDLING
+# Add WebSocket endpoint for audio streaming - IMPROVED ERROR HANDLING + LIVE TRANSCRIPTION
 @app.websocket("/ws/meetings/{meeting_id}/stream")
 async def websocket_endpoint(websocket: WebSocket, meeting_id: int):
-    """WebSocket endpoint for real-time audio streaming"""
+    """WebSocket endpoint for real-time audio streaming with live transcription"""
     print(f"[DEBUG] WebSocket endpoint called for meeting {meeting_id}")
+    
+    # Track audio data for live transcription
+    audio_buffer = bytearray()
+    last_transcription_time = time.time()
+    chunk_counter = 0
     
     try:
         await websocket.accept()
@@ -497,6 +502,10 @@ async def websocket_endpoint(websocket: WebSocket, meeting_id: int):
                         audio_data = message["bytes"]
                         print(f"[DEBUG] Received {len(audio_data)} bytes of audio data")
                         
+                        # Add to audio buffer for live transcription
+                        audio_buffer.extend(audio_data)
+                        chunk_counter += 1
+                        
                         # Send binary acknowledgment as text (JSON)
                         response = {
                             "type": "audio_received",
@@ -505,6 +514,65 @@ async def websocket_endpoint(websocket: WebSocket, meeting_id: int):
                             "meeting_id": meeting_id
                         }
                         await websocket.send_text(json.dumps(response))
+                        
+                        # **NEW: Live transcription every 3 seconds or 5 chunks**
+                        current_time = time.time()
+                        should_transcribe = (
+                            (current_time - last_transcription_time) >= 3.0 or  # Every 3 seconds
+                            chunk_counter >= 5 or  # Every 5 chunks
+                            len(audio_buffer) >= 50000  # Or when buffer gets large (50KB)
+                        )
+                        
+                        if should_transcribe and len(audio_buffer) >= 8000:  # At least 8KB of audio
+                            print(f"[DEBUG] Triggering live transcription: buffer={len(audio_buffer)} bytes, chunks={chunk_counter}")
+                            
+                            try:
+                                # Create a live transcription (simplified version)
+                                live_text = await process_live_audio_chunk(audio_buffer, meeting_id)
+                                
+                                if live_text:
+                                    # Create live transcription segment
+                                    live_segment = {
+                                        "speaker": "Speaker 1", 
+                                        "start_time": current_time - last_transcription_time,
+                                        "end_time": current_time,
+                                        "text": live_text
+                                    }
+                                    
+                                    # Send live transcription to frontend
+                                    transcription_message = {
+                                        "type": "transcription",
+                                        "data": {
+                                            "segments": [live_segment],
+                                            "start_time": live_segment["start_time"],
+                                            "end_time": live_segment["end_time"]
+                                        }
+                                    }
+                                    
+                                    await websocket.send_text(json.dumps(transcription_message))
+                                    print(f"[DEBUG] Sent live transcription: '{live_text[:50]}...'")
+                                    
+                                    # Save to transcriptions storage as well
+                                    if meeting_id not in transcriptions_storage:
+                                        transcriptions_storage[meeting_id] = []
+                                    
+                                    stored_transcription = {
+                                        "id": int(time.time()) % 10000,
+                                        "meeting_id": meeting_id,
+                                        "speaker": live_segment["speaker"],
+                                        "text": live_text,
+                                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime(current_time))
+                                    }
+                                    
+                                    transcriptions_storage[meeting_id].append(stored_transcription)
+                                    
+                            except Exception as live_error:
+                                print(f"[DEBUG] Live transcription error: {live_error}")
+                            
+                            # Reset for next live transcription
+                            last_transcription_time = current_time
+                            chunk_counter = 0
+                            audio_buffer = bytearray()  # Clear buffer
                         
                 elif message["type"] == "websocket.disconnect":
                     print(f"[DEBUG] WebSocket disconnect message received")
@@ -536,6 +604,53 @@ async def websocket_endpoint(websocket: WebSocket, meeting_id: int):
             await websocket.close(code=1000, reason="Server error")
         except:
             pass
+
+# **NEW: Live audio processing function**
+async def process_live_audio_chunk(audio_buffer: bytearray, meeting_id: int) -> str:
+    """Process audio buffer for live transcription"""
+    try:
+        if not openai or not os.getenv("OPENAI_API_KEY"):
+            # Return mock live transcription if OpenAI not available
+            return f"Live transcription chunk {int(time.time()) % 100}..."
+        
+        print(f"[DEBUG] Processing live audio chunk: {len(audio_buffer)} bytes")
+        
+        # Create temporary file for live transcription
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_file:
+            temp_file.write(audio_buffer)
+            temp_path = temp_file.name
+        
+        try:
+            # Use OpenAI Whisper for live transcription
+            with open(temp_path, 'rb') as audio_file:
+                client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                
+                response = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    response_format="text"  # Simple text for live transcription
+                )
+            
+            # Extract transcription text
+            if hasattr(response, 'text'):
+                transcription_text = response.text.strip()
+                print(f"[DEBUG] Live transcription successful: '{transcription_text[:100]}...'")
+                return transcription_text
+            else:
+                print(f"[DEBUG] Live transcription: no text in response")
+                return ""
+                
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+                
+    except Exception as e:
+        print(f"[DEBUG] Live transcription error: {e}")
+        # Return a placeholder for live feedback
+        return f"[Processing audio chunk...]"
 
 # Add HTTP fallback for audio recording
 @app.post("/meetings/{meeting_id}/audio")
