@@ -46,6 +46,7 @@ except Exception as e:
 # Create minimal FastAPI app
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 app = FastAPI(
     title="Minimal Test API",
@@ -149,6 +150,13 @@ async def create_meeting(request: Request):
     auth_header = request.headers.get("authorization", "")
     print(f"[DEBUG] POST /meetings/ - Auth header: {auth_header[:50]}..." if auth_header else "[DEBUG] POST /meetings/ - No auth header")
     
+    # Log request body
+    try:
+        body = await request.body()
+        print(f"[DEBUG] POST /meetings/ - Request body: {body.decode('utf-8') if body else 'empty'}")
+    except Exception as e:
+        print(f"[DEBUG] POST /meetings/ - Error reading body: {e}")
+    
     # Mock meeting creation - accept any Authorization header
     meeting = {
         "id": 1,
@@ -158,7 +166,19 @@ async def create_meeting(request: Request):
         "owner_id": 1,
         "is_ended": False
     }
-    return meeting
+    
+    print(f"[DEBUG] POST /meetings/ - Returning meeting: {meeting}")
+    print(f"[DEBUG] POST /meetings/ - Request headers: {dict(request.headers)}")
+    
+    # Return explicit JSONResponse with status 201 (Created) and custom header
+    return JSONResponse(
+        content=meeting,
+        status_code=201,
+        headers={
+            "X-Meeting-Created": "true",
+            "X-Debug": "meeting-creation-successful"
+        }
+    )
 
 # Add basic tags endpoint
 @app.get("/tags/")
