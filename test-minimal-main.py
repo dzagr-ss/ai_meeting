@@ -155,14 +155,15 @@ async def create_meeting(request: Request):
     print(f"[DEBUG] POST /meetings/ - Method: {request.method}")
     print(f"[DEBUG] POST /meetings/ - URL: {request.url}")
     
-    # Mock meeting creation - accept any Authorization header
+    # Mock meeting creation - return format that matches frontend expectations
     meeting = {
         "id": 1,
         "title": "Test Meeting",
-        "status": "active",
-        "created_at": "2025-06-04T21:20:00Z",
-        "owner_id": 1,
-        "is_ended": False
+        "description": None,  # Frontend expects description field
+        "start_time": "2025-06-04T21:20:00Z",  # Frontend expects start_time, not created_at
+        "end_time": None,  # Frontend expects end_time field
+        "status": "scheduled",  # Use expected status values: scheduled, in_progress, completed
+        "tags": []  # Frontend expects tags array
     }
     
     print(f"[DEBUG] POST /meetings/ - Returning meeting: {meeting}")
@@ -172,8 +173,10 @@ async def create_meeting(request: Request):
         content=meeting,
         status_code=201,
         headers={
+            "Content-Type": "application/json",
             "X-Meeting-Created": "true",
-            "X-Debug": "meeting-creation-successful"
+            "X-Debug": "meeting-creation-successful",
+            "Location": f"/meetings/{meeting['id']}"
         }
     )
 
