@@ -603,19 +603,32 @@ def get_db():
     """Database dependency with improved error handling"""
     db = None
     try:
+        if not DATABASE_AVAILABLE:
+            # If database modules aren't available, don't try to create a session
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database service is temporarily unavailable"
+            )
+        
         db = SessionLocal()
         yield db
+    except HTTPException:
+        # Re-raise HTTP exceptions directly
+        raise
     except Exception as e:
         print(f"[Database] Error creating database session: {e}")
-        # For non-critical endpoints, we can continue without DB
-        # But for user registration, we need to fail gracefully
-        yield None
+        # Instead of yielding None, raise an HTTP exception
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable. Please try again later."
+        )
     finally:
         if db:
             try:
                 db.close()
             except Exception as close_error:
                 print(f"[Database] Error closing database session: {close_error}")
+                # Don't raise here, just log the error
 
 # Use settings object for API keys
 GEMINI_API_KEY = settings.GEMINI_API_KEY
@@ -1173,13 +1186,6 @@ async def get_file_structure(
 @app.post("/users/", response_model=schemas.User)
 @limiter.limit("5/minute")
 async def create_user(request: Request, user: schemas.UserCreate, db: Session = Depends(get_db)):
-    # Check if database is available
-    if db is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database service is temporarily unavailable. Please try again later."
-        )
-    
     # Get client IP for logging
     client_ip = request.client.host
     if "x-forwarded-for" in request.headers:
