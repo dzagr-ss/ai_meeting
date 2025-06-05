@@ -262,35 +262,81 @@ async def websocket_test():
 async def websocket_endpoint(websocket: WebSocket, meeting_id: int):
     """WebSocket endpoint for real-time audio streaming"""
     print(f"[DEBUG] WebSocket endpoint called for meeting {meeting_id}")
-    await websocket.accept()
-    print(f"[DEBUG] WebSocket connected for meeting {meeting_id}")
     
     try:
-        # Send a welcome message
-        await websocket.send_text(json.dumps({
+        await websocket.accept()
+        print(f"[DEBUG] WebSocket connected successfully for meeting {meeting_id}")
+        
+        # Send a welcome message immediately
+        welcome_msg = {
             "type": "connection_established",
             "meeting_id": meeting_id,
-            "message": "WebSocket connection successful"
-        }))
+            "message": "WebSocket connection successful",
+            "timestamp": time.time()
+        }
+        await websocket.send_text(json.dumps(welcome_msg))
+        print(f"[DEBUG] Sent welcome message: {welcome_msg}")
         
         while True:
-            # Receive audio data from client
-            data = await websocket.receive_bytes()
-            print(f"[DEBUG] Received {len(data)} bytes of audio data for meeting {meeting_id}")
-            
-            # In a real implementation, this would process the audio data
-            # For testing, we just acknowledge receipt
-            await websocket.send_text(json.dumps({
-                "type": "audio_received",
-                "bytes_received": len(data),
-                "timestamp": time.time()
-            }))
-            
+            try:
+                # Wait for data from client
+                data = await websocket.receive_text()
+                print(f"[DEBUG] Received text data: {data[:100]}...")
+                
+                # Echo back acknowledgment
+                response = {
+                    "type": "message_received",
+                    "data_length": len(data),
+                    "timestamp": time.time()
+                }
+                await websocket.send_text(json.dumps(response))
+                
+            except Exception as recv_error:
+                print(f"[DEBUG] Error receiving data: {recv_error}")
+                # Try to receive bytes instead
+                try:
+                    data = await websocket.receive_bytes()
+                    print(f"[DEBUG] Received {len(data)} bytes of audio data")
+                    
+                    response = {
+                        "type": "audio_received",
+                        "bytes_received": len(data),
+                        "timestamp": time.time()
+                    }
+                    await websocket.send_text(json.dumps(response))
+                    
+                except Exception as bytes_error:
+                    print(f"[DEBUG] Error receiving bytes: {bytes_error}")
+                    break
+                    
     except WebSocketDisconnect:
-        print(f"[DEBUG] WebSocket disconnected for meeting {meeting_id}")
+        print(f"[DEBUG] WebSocket disconnected normally for meeting {meeting_id}")
     except Exception as e:
         print(f"[DEBUG] WebSocket error for meeting {meeting_id}: {e}")
-        await websocket.close()
+        try:
+            await websocket.close(code=1000, reason="Server error")
+        except:
+            pass
+
+# Add HTTP fallback for audio recording
+@app.post("/meetings/{meeting_id}/audio")
+async def upload_audio_chunk(meeting_id: int, request: Request):
+    """HTTP fallback endpoint for audio chunk upload"""
+    try:
+        # Read the audio data
+        audio_data = await request.body()
+        print(f"[DEBUG] Received {len(audio_data)} bytes of audio via HTTP for meeting {meeting_id}")
+        
+        # In a real implementation, this would process/store the audio
+        return {
+            "status": "success",
+            "bytes_received": len(audio_data),
+            "meeting_id": meeting_id,
+            "timestamp": time.time()
+        }
+    except Exception as e:
+        print(f"[DEBUG] Error processing audio upload: {e}")
+        return {"status": "error", "message": str(e)}
 
 print("✅ All endpoints registered with CORS support")
 
