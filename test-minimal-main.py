@@ -251,14 +251,28 @@ async def get_meeting_details(meeting_id: int):
         "tags": []
     }
 
+# Add a test endpoint to check WebSocket readiness
+@app.get("/ws/test")
+async def websocket_test():
+    """Test endpoint to verify WebSocket routes are working"""
+    return {"message": "WebSocket routing is working", "available_endpoints": ["/ws/meetings/{meeting_id}/stream"]}
+
 # Add WebSocket endpoint for audio streaming
 @app.websocket("/ws/meetings/{meeting_id}/stream")
 async def websocket_endpoint(websocket: WebSocket, meeting_id: int):
     """WebSocket endpoint for real-time audio streaming"""
+    print(f"[DEBUG] WebSocket endpoint called for meeting {meeting_id}")
     await websocket.accept()
     print(f"[DEBUG] WebSocket connected for meeting {meeting_id}")
     
     try:
+        # Send a welcome message
+        await websocket.send_text(json.dumps({
+            "type": "connection_established",
+            "meeting_id": meeting_id,
+            "message": "WebSocket connection successful"
+        }))
+        
         while True:
             # Receive audio data from client
             data = await websocket.receive_bytes()
@@ -279,6 +293,12 @@ async def websocket_endpoint(websocket: WebSocket, meeting_id: int):
         await websocket.close()
 
 print("✅ All endpoints registered with CORS support")
+
+# Debug: List all registered routes
+print("\n=== Registered Routes ===")
+for route in app.routes:
+    print(f"Route: {route.path} | Methods: {getattr(route, 'methods', 'N/A')} | Name: {getattr(route, 'name', 'N/A')}")
+print("========================\n")
 
 if __name__ == "__main__":
     print("=== Starting Uvicorn Server ===")
