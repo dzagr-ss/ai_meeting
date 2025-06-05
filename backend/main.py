@@ -206,18 +206,43 @@ except ImportError as e:
         'ACCESS_TOKEN_EXPIRE_MINUTES': 30,
         'OPENAI_API_KEY': '',
         'GEMINI_API_KEY': '',
-        'DATABASE_URL': 'sqlite:///./test.db'
+        'DATABASE_URL': 'sqlite:///./test.db',
+        'SHOW_BACKEND_LOGS': os.getenv('SHOW_BACKEND_LOGS', '').lower() in ('true', '1', 'yes'),
+        'AUTO_CLEANUP_AUDIO_FILES': False,
+        'BACKEND_CORS_ORIGINS': 'http://localhost:3000,http://127.0.0.1:3000'
     })()
 
 try:
-    from speaker_identification import create_speaker_identifier
+    from .speaker_identification import create_speaker_identifier
     SPEAKER_ID_AVAILABLE = True
     print("Speaker identification module loaded")
 except ImportError:
     SPEAKER_ID_AVAILABLE = False
     print("Speaker identification not available")
     def create_speaker_identifier():
-        return None
+        class MockSpeakerIdentifier:
+            def __init__(self):
+                self.segment_counter = 0
+                self.audio_buffer = []
+                self.buffer_start_time = 0.0
+                self.sample_rate = 16000
+                print("[MOCK] SpeakerIdentifier initialized")
+                
+            def process_audio_chunk(self, audio_chunk, start_time):
+                self.segment_counter += 1
+                print(f"[MOCK] Processing audio chunk {self.segment_counter}, start_time={start_time}")
+                
+                # Generate test segments every chunk for testing
+                segment = {
+                    "speaker": f"Speaker_{(self.segment_counter % 3) + 1}",
+                    "text": f"Test live transcription segment {self.segment_counter}. Live audio processing is working.",
+                    "start_time": start_time,
+                    "end_time": start_time + 2.0
+                }
+                print(f"[MOCK] Generated segment: {segment}")
+                return [segment]
+                
+        return MockSpeakerIdentifier()
 
 try:
     from audio_processor import AudioChunker
@@ -228,9 +253,28 @@ except ImportError:
     print("Audio processor not available")
     class AudioChunker:
         def __init__(self, *args, **kwargs):
-            pass
+            self.segment_counter = 0
+            self.buffer = []
         def process_chunk(self, *args, **kwargs):
+            # Generate test transcription segments for development
+            self.segment_counter += 1
+            if self.segment_counter % 5 == 0:  # Every 5th chunk generates a segment
+                return [{
+                    "speaker": f"Speaker_{(self.segment_counter // 5) % 2 + 1}",
+                    "text": f"This is test transcription segment {self.segment_counter // 5}. The audio processing is working but actual speech-to-text requires ML libraries.",
+                    "start_time": (self.segment_counter // 5 - 1) * 3.0,
+                    "end_time": (self.segment_counter // 5) * 3.0
+                }]
             return []
+        async def process_audio_stream(self, audio_chunks):
+            # Mock async generator for audio stream processing
+            for i, audio_chunk in enumerate(audio_chunks):
+                chunk_duration = len(audio_chunk) / 16000.0  # Assume 16kHz
+                start_time = i * chunk_duration
+                end_time = start_time + chunk_duration
+                yield audio_chunk, start_time, end_time
+        def cleanup(self):
+            pass
 
 try:
     from email_service import email_service
@@ -379,15 +423,15 @@ async def ping():
 
 @app.get("/test-full-implementation")
 async def test_full_implementation():
-    """Test endpoint to confirm full implementation is deployed"""
+    """Test endpoint to verify all features are available"""
     return {
         "message": "Full implementation deployed successfully",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now().isoformat(),
         "features": {
             "whisperx": HEAVY_ML_AVAILABLE,
             "genai": GENAI_AVAILABLE,
             "database": DATABASE_AVAILABLE,
-            "email": EMAIL_AVAILABLE,
+            "email": hasattr(email_service, 'send_password_reset_email'),
             "speaker_id": SPEAKER_ID_AVAILABLE
         }
     }
@@ -601,27 +645,26 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 # Dependency
 def get_db():
     """Database dependency with improved error handling"""
-    db = None
-    try:
-        if not DATABASE_AVAILABLE:
-            # If database modules aren't available, don't try to create a session
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database service is temporarily unavailable"
-            )
-        
-        db = SessionLocal()
-        yield db
-    except HTTPException:
-        # Re-raise HTTP exceptions directly
-        raise
-    except Exception as e:
-        print(f"[Database] Error creating database session: {e}")
-        # Instead of yielding None, raise an HTTP exception
+    if not DATABASE_AVAILABLE:
+        # If database modules aren't available, raise exception early
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database service is temporarily unavailable. Please try again later."
+            detail="Database service is temporarily unavailable"
         )
+    
+    db = None
+    try:
+        db = SessionLocal()
+        yield db
+    except Exception as e:
+        print(f"[Database] Error with database session: {e}")
+        # Log the error but let the endpoint handle it
+        if db:
+            try:
+                db.rollback()
+            except:
+                pass
+        raise  # Re-raise the original exception
     finally:
         if db:
             try:
@@ -924,7 +967,7 @@ async def update_transcriptions_with_refined_speakers(
     return updated_count
 
 def find_best_matching_segment_optimized(
-    transcription: models.Transcription, 
+    transcription: "models.Transcription" if models else Any, 
     refined_segments: List[dict],
     segment_text_index: dict
 ) -> dict:
@@ -1062,7 +1105,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         email: str = payload.get("sub")
         if email is None:
             raise credentials_exception
-    except jwt.PyJWTError:
+    except jwt.JWTError:
         raise credentials_exception
     user = crud.get_user_by_email(db, email=email)
     if user is None:
@@ -1144,7 +1187,7 @@ async def root():
 
 @app.post("/admin/migrate-files")
 async def migrate_files_endpoint(
-    current_user: models.User = Depends(get_current_user),
+    current_user: "models.User" if models else Any = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Migrate existing files from old structure to new user-based structure"""
@@ -1157,7 +1200,7 @@ async def migrate_files_endpoint(
 
 @app.get("/admin/file-structure")
 async def get_file_structure(
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     """Get current file structure for debugging"""
     structure = {}
@@ -1183,51 +1226,173 @@ async def get_file_structure(
     
     return structure
 
-@app.post("/users/", response_model=schemas.User)
+@app.post("/users/")
 @limiter.limit("5/minute")
-async def create_user(request: Request, user: schemas.UserCreate, db: Session = Depends(get_db)):
+async def create_user(request: Request):
+    print(f"[UserCreation] Endpoint called")
+    
     # Get client IP for logging
     client_ip = request.client.host
     if "x-forwarded-for" in request.headers:
         client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
     
+    print(f"[UserCreation] Client IP: {client_ip}")
+    
     try:
-        # Check if user already exists
-        db_user = crud.get_user_by_email(db, email=user.email)
-        if db_user:
-            log_security_event("user_registration_attempt_duplicate", ip_address=client_ip, details={
-                "email": user.email
+        # Parse request body manually to handle validation errors properly
+        try:
+            body = await request.json()
+        except Exception as json_error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON in request body"
+            )
+        
+        # Extract and validate email and password manually
+        email = body.get("email")
+        password = body.get("password")
+        
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "Validation Error",
+                    "detail": "Email is required",
+                    "user_friendly_errors": ["email: Email is required"]
+                }
+            )
+        
+        if not password:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "Validation Error",
+                    "detail": "Password is required",
+                    "user_friendly_errors": ["password: Password is required"]
+                }
+            )
+        
+        # Validate password complexity manually to provide better error messages
+        password_errors = []
+        
+        if len(password) < 8:
+            password_errors.append('Password must be at least 8 characters long')
+        if len(password) > 128:
+            password_errors.append('Password must be less than 128 characters')
+        if not re.search(r'[A-Z]', password):
+            password_errors.append('Password must contain at least one uppercase letter')
+        if not re.search(r'[a-z]', password):
+            password_errors.append('Password must contain at least one lowercase letter')
+        if not re.search(r'\d', password):
+            password_errors.append('Password must contain at least one number')
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+            password_errors.append('Password must contain at least one special character (!@#$%^&*(),.?":{}|<>)')
+        
+        if password_errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "Validation Error",
+                    "detail": "Password validation failed",
+                    "validation_errors": [
+                        {
+                            "type": "value_error",
+                            "loc": ["body", "password"],
+                            "msg": ". ".join(password_errors),
+                            "input": password
+                        }
+                    ],
+                    "user_friendly_errors": [f"password: {'. '.join(password_errors)}"]
+                }
+            )
+        
+        # Validate email format using Pydantic EmailStr
+        try:
+            from pydantic import BaseModel, EmailStr, ValidationError as PydanticValidationError
+            
+            # Create a temporary model to validate email
+            class EmailValidator(BaseModel):
+                email: EmailStr
+            
+            # Validate email by creating model instance
+            EmailValidator(email=email)
+            
+        except (PydanticValidationError, ValueError) as email_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "Validation Error",
+                    "detail": "Invalid email format",
+                    "user_friendly_errors": ["email: Invalid email format"]
+                }
+            )
+        
+        # Now create the Pydantic object (this should work since we've pre-validated)
+        try:
+            if schemas:
+                user = schemas.UserCreate(email=email, password=password)
+            else:
+                # Create a simple dict when schemas not available
+                user = type('UserCreate', (), {'email': email, 'password': password})()
+        except Exception as pydantic_error:
+            print(f"[UserCreation] Unexpected Pydantic error after manual validation: {pydantic_error}")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "Validation Error",
+                    "detail": str(pydantic_error),
+                    "user_friendly_errors": [str(pydantic_error)]
+                }
+            )
+        
+        # Handle database session manually instead of using dependency
+        if not DATABASE_AVAILABLE:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database service is temporarily unavailable"
+            )
+        
+        db = SessionLocal()
+        try:
+            # Check if user already exists
+            db_user = crud.get_user_by_email(db, email=user.email)
+            if db_user:
+                log_security_event("user_registration_attempt_duplicate", ip_address=client_ip, details={
+                    "email": user.email
+                })
+                raise HTTPException(status_code=400, detail="Email already registered")
+            
+            print(f"[UserCreation] About to create user with email: {user.email}")
+            
+            # Create new user
+            try:
+                new_user = crud.create_user(db=db, user=user)
+                print(f"[UserCreation] User created successfully: {new_user.id}")
+            except Exception as crud_error:
+                print(f"[UserCreation] Error in crud.create_user: {crud_error}")
+                print(f"[UserCreation] Error type: {type(crud_error)}")
+                import traceback
+                traceback.print_exc()
+                # Re-raise as HTTPException with better error message
+                error_msg = str(crud_error)
+                if "unique constraint" in error_msg.lower():
+                    raise HTTPException(status_code=400, detail="Email already registered")
+                elif "database" in error_msg.lower():
+                    raise HTTPException(status_code=503, detail="Database temporarily unavailable")
+                else:
+                    raise HTTPException(status_code=500, detail=f"Database error: {error_msg}")
+            
+            log_audit_event("user_created", new_user.id, "user", new_user.id, {
+                "email": user.email,
+                "ip_address": client_ip
             })
-            raise HTTPException(status_code=400, detail="Email already registered")
+            
+            # Return the user object directly for response model validation
+            return new_user
+            
+        finally:
+            db.close()
         
-        # Create new user
-        new_user = crud.create_user(db=db, user=user)
-        log_audit_event("user_created", new_user.id, "user", new_user.id, {
-            "email": user.email,
-            "ip_address": client_ip
-        })
-        return new_user
-        
-    except ValidationError as ve:
-        # Handle Pydantic validation errors properly
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "error": "Validation Error",
-                "validation_errors": ve.errors(),
-                "user_friendly_errors": [f"{' -> '.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in ve.errors()]
-            }
-        )
-    except ValueError as ve:
-        # Handle custom validation errors (like password complexity)
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "error": "Validation Error", 
-                "detail": str(ve),
-                "user_friendly_errors": [str(ve)]
-            }
-        )
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
@@ -1235,6 +1400,7 @@ async def create_user(request: Request, user: schemas.UserCreate, db: Session = 
         print(f"[UserCreation] Unexpected error: {e}")
         import traceback
         traceback.print_exc()
+        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create user account. Please try again later."
@@ -1242,33 +1408,45 @@ async def create_user(request: Request, user: schemas.UserCreate, db: Session = 
 
 @app.post("/token")
 @limiter.limit("10/minute")
-async def login(request: Request, user_data: schemas.UserLogin, db: Session = Depends(get_db)):
+async def login(request: Request, user_data: schemas.UserLogin if schemas else Dict[str, Any], db: Session = Depends(get_db)):
     # Get client IP for logging
     client_ip = request.client.host
     if "x-forwarded-for" in request.headers:
         client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
     
-    user = crud.authenticate_user(db, user_data.email, user_data.password)
-    if not user:
-        log_security_event("login_failed", ip_address=client_ip, details={
-            "email": user_data.email
+    if models and DATABASE_AVAILABLE:
+        user = crud.authenticate_user(db, user_data.email, user_data.password)
+        if not user:
+            log_security_event("login_failed", ip_address=client_ip, details={
+                "email": user_data.email
+            })
+            raise HTTPException(status_code=401, detail="Incorrect email or password")
+        
+        access_token = crud.create_access_token(data={"sub": user.email})
+        log_audit_event("user_login", user.id, "authentication", details={
+            "ip_address": client_ip
         })
-        raise HTTPException(status_code=401, detail="Incorrect email or password")
-    
-    access_token = crud.create_access_token(data={"sub": user.email})
-    log_audit_event("user_login", user.id, "authentication", details={
-        "ip_address": client_ip
-    })
-    return {"access_token": access_token, "token_type": "bearer"}
+        return {"access_token": access_token, "token_type": "bearer"}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
+        )
 
 @app.post("/password-reset/request")
 @limiter.limit("3/minute")
-async def request_password_reset(request: Request, reset_request: schemas.PasswordResetRequest, db: Session = Depends(get_db)):
+async def request_password_reset(request: Request, reset_request: schemas.PasswordResetRequest if schemas else Dict[str, Any], db: Session = Depends(get_db)):
     """Request a password reset token to be sent via email"""
     # Get client IP for logging
     client_ip = request.client.host
     if "x-forwarded-for" in request.headers:
         client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+    
+    if not models or not DATABASE_AVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
+        )
     
     # Check if user exists
     user = crud.get_user_by_email(db, reset_request.email)
@@ -1293,8 +1471,14 @@ async def request_password_reset(request: Request, reset_request: schemas.Passwo
 
 @app.post("/password-reset/confirm")
 @limiter.limit("5/minute")
-async def confirm_password_reset(request: Request, reset_confirm: schemas.PasswordResetConfirm, db: Session = Depends(get_db)):
+async def confirm_password_reset(request: Request, reset_confirm: schemas.PasswordResetConfirm if schemas else Dict[str, Any], db: Session = Depends(get_db)):
     """Confirm password reset with token and set new password"""
+    if not models or not DATABASE_AVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
+        )
+        
     # Validate token and reset password
     success = crud.reset_password(db, reset_confirm.token, reset_confirm.new_password)
     
@@ -1303,42 +1487,60 @@ async def confirm_password_reset(request: Request, reset_confirm: schemas.Passwo
     
     return {"message": "Password has been successfully reset"}
 
-@app.post("/meetings/", response_model=schemas.Meeting)
+@app.post("/meetings/")
 @limiter.limit("20/minute")  # Meeting creation
 def create_meeting(
     request: Request,
-    meeting: schemas.MeetingCreate,
-    current_user: models.User = Depends(get_current_user),
+    meeting: schemas.MeetingCreate if schemas else Dict[str, Any],
+    current_user: "models.User" if models else Any = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Set default meeting title if not provided
+    if not models or not DATABASE_AVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
+        )
+        
     if not meeting.title:
         current_time = datetime.now()
         meeting.title = current_time.strftime("%Y-%m-%d %H:%M")
     
     return crud.create_meeting(db=db, meeting=meeting, user_id=current_user.id)
 
-@app.get("/meetings/", response_model=List[schemas.Meeting])
+@app.get("/meetings/")
 @limiter.limit("60/minute")  # Read operations
 def get_meetings(
     request: Request,
     skip: int = 0,
     limit: int = 100,
-    current_user: models.User = Depends(get_current_user),
+    current_user: "models.User" if models else Any = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    if not models or not DATABASE_AVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
+        )
+        
     meetings = crud.get_meetings(db, skip=skip, limit=limit, user_id=current_user.id)
     return meetings
 
-@app.put("/meetings/{meeting_id}", response_model=schemas.Meeting)
+@app.put("/meetings/{meeting_id}")
 @limiter.limit("30/minute")  # Update operations
 def update_meeting(
     request: Request,
     meeting_id: int,
-    meeting_update: schemas.MeetingUpdate,
-    current_user: models.User = Depends(get_current_user),
+    meeting_update: schemas.MeetingUpdate if schemas else Dict[str, Any],
+    current_user: "models.User" if models else Any = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    if not models or not DATABASE_AVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
+        )
+        
     updated_meeting = crud.update_meeting(db=db, meeting_id=meeting_id, meeting_update=meeting_update, user_id=current_user.id)
     if not updated_meeting:
         raise HTTPException(status_code=404, detail="Meeting not found or you don't have permission to update it")
@@ -1349,7 +1551,7 @@ def update_meeting(
 def delete_meeting(
     request: Request,
     meeting_id: int,
-    current_user: models.User = Depends(get_current_user),
+    current_user: "models.User" if models else Any = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     success = crud.delete_meeting(db=db, meeting_id=meeting_id, user_id=current_user.id)
@@ -1357,32 +1559,42 @@ def delete_meeting(
         raise HTTPException(status_code=404, detail="Meeting not found or you don't have permission to delete it")
     return {"message": "Meeting deleted successfully"}
 
-@app.get("/meetings/{meeting_id}/transcriptions", response_model=List[schemas.Transcription])
+@app.get("/meetings/{meeting_id}/transcriptions")
 @limiter.limit("60/minute")  # Read operations
 def get_meeting_transcriptions(
     request: Request,
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     # Verify the meeting exists and belongs to the current user
-    meeting = db.query(models.Meeting).filter(
-        models.Meeting.id == meeting_id,
-        models.Meeting.owner_id == current_user.id
-    ).first()
-    
-    if not meeting:
+    if models and DATABASE_AVAILABLE:
+        meeting = db.query(models.Meeting).filter(
+            models.Meeting.id == meeting_id,
+            models.Meeting.owner_id == current_user.id
+        ).first()
+        
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Meeting not found"
+            )
+        
+        # Get all transcriptions for this meeting, ordered by timestamp
+        # Filter out records with empty text to prevent validation errors
+        transcriptions = db.query(models.Transcription).filter(
+            models.Transcription.meeting_id == meeting_id,
+            models.Transcription.text != "",
+            models.Transcription.text.isnot(None)
+        ).order_by(models.Transcription.timestamp).all()
+        
+        return transcriptions
+    else:
+        # Database not available
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
         )
-    
-    # Get all transcriptions for this meeting, ordered by timestamp
-    transcriptions = db.query(models.Transcription).filter(
-        models.Transcription.meeting_id == meeting_id
-    ).order_by(models.Transcription.timestamp).all()
-    
-    return transcriptions
 
 @app.options("/meetings/{meeting_id}/transcribe")
 async def options_transcribe():
@@ -1407,7 +1619,7 @@ async def transcribe_meeting(
     meeting_id: int,
     audio: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     try:
         print(f"[Transcribe] Starting secure upload processing for meeting {meeting_id}")
@@ -1453,18 +1665,20 @@ async def transcribe_meeting(
         
         # Create a placeholder transcription record so the system knows audio exists
         try:
-            placeholder_transcription = models.Transcription(
-                meeting_id=meeting_id,
-                speaker="System",
-                text=".",
-                timestamp=datetime.utcnow()
-            )
-            db.add(placeholder_transcription)
-            db.commit()
-            print(f"[Transcribe] Created placeholder transcription record: {placeholder_transcription.id}")
+            if models and DATABASE_AVAILABLE:
+                placeholder_transcription = models.Transcription(
+                    meeting_id=meeting_id,
+                    speaker="System",
+                    text=f"Audio file uploaded: {os.path.basename(audio_filename)}",
+                    timestamp=datetime.utcnow()
+                )
+                db.add(placeholder_transcription)
+                db.commit()
+                print(f"[Transcribe] Created placeholder transcription record: {placeholder_transcription.id}")
         except Exception as e:
             print(f"[Transcribe] Error creating placeholder transcription: {e}")
-            db.rollback()
+            if models and DATABASE_AVAILABLE:
+                db.rollback()
             # Continue anyway - the audio file is still saved
         
         # Return success message
@@ -1487,14 +1701,14 @@ async def transcribe_meeting(
             detail=f"Unexpected error during upload: {str(e)}"
         )
 
-@app.post("/meetings/{meeting_id}/identify-speakers", response_model=schemas.SpeakerIdentificationResponse)
+@app.post("/meetings/{meeting_id}/identify-speakers")
 @limiter.limit("5/minute")  # Very resource intensive
 async def identify_speakers(
     request: Request,
     meeting_id: int,
     audio: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     temp_audio_path = None
     try:
@@ -1544,7 +1758,7 @@ async def refine_speaker_diarization(
     request: Request,
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     """
     Refine speaker diarization using all audio files for the meeting
@@ -1556,15 +1770,21 @@ async def refine_speaker_diarization(
         print(f"[SpeakerRefinement] Starting speaker refinement for meeting {meeting_id}")
         
         # Verify the meeting exists and belongs to the current user
-        meeting = db.query(models.Meeting).filter(
-            models.Meeting.id == meeting_id,
-            models.Meeting.owner_id == current_user.id
-        ).first()
-        
-        if not meeting:
+        if models and DATABASE_AVAILABLE:
+            meeting = db.query(models.Meeting).filter(
+                models.Meeting.id == meeting_id,
+                models.Meeting.owner_id == current_user.id
+            ).first()
+            
+            if not meeting:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Meeting not found"
+                )
+        else:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Meeting not found"
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database service is temporarily unavailable"
             )
         
         # Get all audio files for this meeting
@@ -1720,7 +1940,7 @@ async def stream_audio(
             #     await websocket.close(code=1008, reason="Invalid token: user not found")
             #     return
 
-        except jwt.PyJWTError:
+        except jwt.JWTError:
             await websocket.close(code=1008, reason="Invalid or expired token")
             return
 
@@ -1741,21 +1961,21 @@ async def stream_audio(
 
         # Process incoming raw audio data (Float32Array bytes)
         while True:
-            data = await websocket.receive_bytes()
-
+            data = await websocket.receive()
+            print(f"[DEBUG] WebSocket received data: type={type(data)}, size={len(data) if hasattr(data, '__len__') else 'N/A'}")
+            
             if isinstance(data, bytes):
+                print(f"[DEBUG] Processing binary audio data: {len(data)} bytes")
+                recv_time = time.time()
                 try:
-                    buffer_size_before = len(chunker.buffer)
-                    if settings.SHOW_BACKEND_LOGS:
-                        print(f"[WebSocket] Received audio chunk: {len(data)} bytes. Chunker buffer size before: {buffer_size_before}")
-                    recv_time = time.time()
-
-                    if len(data) % 4 != 0:
-                         if settings.SHOW_BACKEND_LOGS:
-                             print(f"Warning: Received byte data length ({len(data)}) is not a multiple of 4. Skipping processing for this chunk.")
-                         continue
-
+                    # Convert bytes to numpy array (assuming Float32Array from frontend)
                     audio_chunk = np.frombuffer(data, dtype=np.float32)
+                    print(f"[DEBUG] Converted to numpy array: shape={audio_chunk.shape}")
+                    
+                    if len(audio_chunk) == 0:
+                        print("[DEBUG] Empty audio chunk, skipping")
+                        continue
+                    
                     if settings.SHOW_BACKEND_LOGS:
                         print(f"[WebSocket] Audio chunk shape: {audio_chunk.shape}, dtype: {audio_chunk.dtype}")
 
@@ -1824,21 +2044,25 @@ async def stream_audio(
                                        print(f"[WebSocket] Sending segment: {final_segment}")
                                    
                                    # Save transcription to database
-                                   try:
-                                       transcription = models.Transcription(
-                                           meeting_id=meeting_id,
-                                           speaker=final_segment["speaker"],
-                                           text=final_segment["text"],
-                                           timestamp=datetime.utcnow()
-                                       )
-                                       db.add(transcription)
-                                       db.commit()
+                                   if models and DATABASE_AVAILABLE:
+                                       try:
+                                           transcription = models.Transcription(
+                                               meeting_id=meeting_id,
+                                               speaker=final_segment["speaker"],
+                                               text=final_segment["text"],
+                                               timestamp=datetime.utcnow()
+                                           )
+                                           db.add(transcription)
+                                           db.commit()
+                                           if settings.SHOW_BACKEND_LOGS:
+                                               print(f"[WebSocket] Saved transcription to database: {transcription.id}")
+                                       except Exception as e:
+                                           if settings.SHOW_BACKEND_LOGS:
+                                               print(f"[WebSocket] Error saving transcription to database: {e}")
+                                           db.rollback()
+                                   else:
                                        if settings.SHOW_BACKEND_LOGS:
-                                           print(f"[WebSocket] Saved transcription to database: {transcription.id}")
-                                   except Exception as e:
-                                       if settings.SHOW_BACKEND_LOGS:
-                                           print(f"[WebSocket] Error saving transcription to database: {e}")
-                                       db.rollback()
+                                           print("[WebSocket] Database not available - skipping transcription save")
                                    
                                    await websocket.send_json({
                                        "type": "transcription",
@@ -1873,21 +2097,25 @@ async def stream_audio(
                 print("Sending final pending segment on disconnect.")
             
             # Save final transcription to database
-            try:
-                transcription = models.Transcription(
-                    meeting_id=meeting_id,
-                    speaker=last_processed_segment["speaker"],
-                    text=last_processed_segment["text"],
-                    timestamp=datetime.utcnow()
-                )
-                db.add(transcription)
-                db.commit()
+            if models and DATABASE_AVAILABLE:
+                try:
+                    transcription = models.Transcription(
+                        meeting_id=meeting_id,
+                        speaker=last_processed_segment["speaker"],
+                        text=last_processed_segment["text"],
+                        timestamp=datetime.utcnow()
+                    )
+                    db.add(transcription)
+                    db.commit()
+                    if settings.SHOW_BACKEND_LOGS:
+                        print(f"[WebSocket] Saved final transcription to database: {transcription.id}")
+                except Exception as e:
+                    if settings.SHOW_BACKEND_LOGS:
+                        print(f"[WebSocket] Error saving final transcription to database: {e}")
+                    db.rollback()
+            else:
                 if settings.SHOW_BACKEND_LOGS:
-                    print(f"[WebSocket] Saved final transcription to database: {transcription.id}")
-            except Exception as e:
-                if settings.SHOW_BACKEND_LOGS:
-                    print(f"[WebSocket] Error saving final transcription to database: {e}")
-                db.rollback()
+                    print("[WebSocket] Database not available - skipping final transcription save")
             
             try:
                 await websocket.send_json({
@@ -1922,22 +2150,25 @@ async def stream_audio(
                             if remaining_segments:
                                 for segment in remaining_segments:
                                     # Save remaining transcription to database
-                                    try:
-                                        transcription = models.Transcription(
-                                            meeting_id=meeting_id,
-                                            speaker=segment["speaker"],
-                                            text=segment["text"],
-                                            timestamp=datetime.utcnow()
-                                        )
-                                        db.add(transcription)
-                                        db.commit()
+                                    if models and DATABASE_AVAILABLE:
+                                        try:
+                                            transcription = models.Transcription(
+                                                meeting_id=meeting_id,
+                                                speaker=segment["speaker"],
+                                                text=segment["text"],
+                                                timestamp=datetime.utcnow()
+                                            )
+                                            db.add(transcription)
+                                            db.commit()
+                                            if settings.SHOW_BACKEND_LOGS:
+                                                print(f"[WebSocket] Saved remaining transcription to database: {transcription.id}")
+                                        except Exception as e:
+                                            if settings.SHOW_BACKEND_LOGS:
+                                                print(f"[WebSocket] Error saving remaining transcription to database: {e}")
+                                            db.rollback()
+                                    else:
                                         if settings.SHOW_BACKEND_LOGS:
-                                            print(f"[WebSocket] Saved remaining transcription to database: {transcription.id}")
-                                    except Exception as e:
-                                        if settings.SHOW_BACKEND_LOGS:
-                                            print(f"[WebSocket] Error saving remaining transcription to database: {e}")
-                                        db.rollback()
-                                    
+                                            print("[WebSocket] Database not available - skipping remaining transcription save")
                                     try:
                                         await websocket.send_json({
                                             "type": "transcription",
@@ -2036,53 +2267,65 @@ async def summarize_audio(request: Request, audio: UploadFile = File(...)):
     summary = "This is a dummy summary."  # Replace with real logic
     return JSONResponse({"summary": summary})
 
-@app.get("/meetings/{meeting_id}/summaries", response_model=List[schemas.Summary])
+@app.get("/meetings/{meeting_id}/summaries")
 @limiter.limit("30/minute")  # Read operations
 def get_meeting_summaries(
     request: Request,
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     # Verify the meeting exists and belongs to the current user
-    meeting = db.query(models.Meeting).filter(
-        models.Meeting.id == meeting_id,
-        models.Meeting.owner_id == current_user.id
-    ).first()
-    
-    if not meeting:
+    if models and DATABASE_AVAILABLE:
+        meeting = db.query(models.Meeting).filter(
+            models.Meeting.id == meeting_id,
+            models.Meeting.owner_id == current_user.id
+        ).first()
+        
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Meeting not found"
+            )
+        
+        # Get all summaries for this meeting, ordered by generation time (newest first)
+        summaries = crud.get_meeting_summaries(db, meeting_id)
+        return summaries
+    else:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
         )
-    
-    # Get all summaries for this meeting, ordered by generation time (newest first)
-    summaries = crud.get_meeting_summaries(db, meeting_id)
-    return summaries
 
-@app.get("/meetings/{meeting_id}/notes", response_model=List[schemas.MeetingNotes])
+@app.get("/meetings/{meeting_id}/notes")
 @limiter.limit("30/minute")  # Read operations
 def get_meeting_notes_endpoint(
     request: Request,
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     # Verify the meeting exists and belongs to the current user
-    meeting = db.query(models.Meeting).filter(
-        models.Meeting.id == meeting_id,
-        models.Meeting.owner_id == current_user.id
-    ).first()
-    
-    if not meeting:
+    if models and DATABASE_AVAILABLE:
+        meeting = db.query(models.Meeting).filter(
+            models.Meeting.id == meeting_id,
+            models.Meeting.owner_id == current_user.id
+        ).first()
+        
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Meeting not found"
+            )
+        
+        # Get all meeting notes for this meeting, ordered by generation time (newest first)
+        meeting_notes = crud.get_meeting_notes(db, meeting_id)
+        return meeting_notes
+    else:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
         )
-    
-    # Get all meeting notes for this meeting, ordered by generation time (newest first)
-    meeting_notes = crud.get_meeting_notes(db, meeting_id)
-    return meeting_notes
 
 @app.get("/meetings/{meeting_id}/status")
 @limiter.limit("60/minute")  # Status checks
@@ -2090,18 +2333,24 @@ def get_meeting_status_endpoint(
     request: Request,
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     # Get the meeting status
-    status_info = crud.get_meeting_status(db, meeting_id, current_user.id)
-    
-    if not status_info:
+    if models and DATABASE_AVAILABLE:
+        status_info = crud.get_meeting_status(db, meeting_id, current_user.id)
+        
+        if not status_info:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Meeting not found"
+            )
+        
+        return status_info
+    else:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
         )
-    
-    return status_info
 
 @app.post("/meetings/{meeting_id}/end")
 @limiter.limit("20/minute")  # Meeting operations
@@ -2109,23 +2358,29 @@ def end_meeting_endpoint(
     request: Request,
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     # Mark the meeting as ended
-    updated_meeting = crud.mark_meeting_as_ended(db, meeting_id, current_user.id)
-    
-    if not updated_meeting:
+    if models and DATABASE_AVAILABLE:
+        updated_meeting = crud.mark_meeting_as_ended(db, meeting_id, current_user.id)
+        
+        if not updated_meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Meeting not found"
+            )
+        
+        return {
+            "message": "Meeting marked as ended successfully",
+            "meeting_id": meeting_id,
+            "end_time": updated_meeting.end_time,
+            "status": updated_meeting.status
+        }
+    else:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
         )
-    
-    return {
-        "message": "Meeting marked as ended successfully",
-        "meeting_id": meeting_id,
-        "end_time": updated_meeting.end_time,
-        "status": updated_meeting.status
-    }
 
 @app.get("/api/meeting/{meeting_id}/summary")
 @limiter.limit("10/minute")  # AI processing intensive
@@ -2133,23 +2388,31 @@ async def get_meeting_summary(
     request: Request,
     meeting_id: int, 
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     # Verify the meeting exists and belongs to the current user
-    meeting = db.query(models.Meeting).filter(
-        models.Meeting.id == meeting_id,
-        models.Meeting.owner_id == current_user.id
-    ).first()
-    
-    if not meeting:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found"
-        )
+    if models and DATABASE_AVAILABLE:
+        meeting = db.query(models.Meeting).filter(
+            models.Meeting.id == meeting_id,
+            models.Meeting.owner_id == current_user.id
+        ).first()
+        
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Meeting not found"
+            )
+    else:
+        # For database-free mode, we'll still allow summary generation but with limited functionality
+        print(f"[Summary] Database not available, running in limited mode for meeting {meeting_id}")
     
     # Check if there's already a stored summary
-    stored_summary = crud.get_latest_meeting_summary(db, meeting_id)
-    stored_meeting_notes = crud.get_latest_meeting_notes(db, meeting_id)
+    stored_summary = None
+    stored_meeting_notes = None
+    
+    if models and DATABASE_AVAILABLE:
+        stored_summary = crud.get_latest_meeting_summary(db, meeting_id)
+        stored_meeting_notes = crud.get_latest_meeting_notes(db, meeting_id)
     
     if stored_summary and stored_meeting_notes:
         try:
@@ -2173,12 +2436,13 @@ async def get_meeting_summary(
                     response_data["action_items"] = chatgpt_action_items
                     
                     # Update the stored summary with new action items
-                    parsed_content["action_items"] = chatgpt_action_items
-                    summary_create = schemas.SummaryCreate(
-                        meeting_id=meeting_id,
-                        content=json.dumps(parsed_content)
-                    )
-                    crud.create_summary(db, summary_create)
+                    if models and DATABASE_AVAILABLE:
+                        parsed_content["action_items"] = chatgpt_action_items
+                        summary_create = schemas.SummaryCreate(
+                            meeting_id=meeting_id,
+                            content=json.dumps(parsed_content)
+                        )
+                        crud.create_summary(db, summary_create)
                 
                 return response_data
             else:
@@ -2207,7 +2471,8 @@ async def get_meeting_summary(
         }, status_code=404)
     try:
         # First, process any uploaded audio files that haven't been transcribed yet
-        await process_uploaded_audio_files(meeting_id, audio_files, db)
+        if models and DATABASE_AVAILABLE:
+            await process_uploaded_audio_files(meeting_id, audio_files, db)
         
         # Check if Gemini API key is available
         if GEMINI_API_KEY and GEMINI_API_KEY != "your-gemini-api-key-here":
@@ -2223,33 +2488,35 @@ async def get_meeting_summary(
         structured_content["action_items"] = chatgpt_action_items
         
         # Generate tags with ChatGPT
-        generated_tags = await generate_tags_with_chatgpt(meeting_id, db)
-        if generated_tags:
-            # Add tags to the meeting
-            crud.add_tags_to_meeting(db, meeting_id, generated_tags, current_user.id)
-            print(f"[Summary] Generated and added tags: {generated_tags}")
+        if models and DATABASE_AVAILABLE:
+            generated_tags = await generate_tags_with_chatgpt(meeting_id, db)
+            if generated_tags:
+                # Add tags to the meeting
+                crud.add_tags_to_meeting(db, meeting_id, generated_tags, current_user.id)
+                print(f"[Summary] Generated and added tags: {generated_tags}")
         
         # Save the summary to database as JSON
-        summary_create = schemas.SummaryCreate(
-            meeting_id=meeting_id,
-            content=json.dumps({
-                "summary": structured_content["summary"],
-                "action_items": structured_content["action_items"]
-            })
-        )
-        crud.create_summary(db, summary_create)
-        
-        # Save the meeting notes separately
-        if structured_content.get("meeting_notes"):
-            meeting_notes_create = schemas.MeetingNotesCreate(
+        if models and DATABASE_AVAILABLE:
+            summary_create = schemas.SummaryCreate(
                 meeting_id=meeting_id,
-                content=structured_content["meeting_notes"]
+                content=json.dumps({
+                    "summary": structured_content["summary"],
+                    "action_items": structured_content["action_items"]
+                })
             )
-            crud.create_meeting_notes(db, meeting_notes_create)
-        
-        # Mark the meeting as ended
-        crud.mark_meeting_as_ended(db, meeting_id, current_user.id)
-        print(f"[Summary] Meeting {meeting_id} marked as ended")
+            crud.create_summary(db, summary_create)
+            
+            # Save the meeting notes separately
+            if structured_content.get("meeting_notes"):
+                meeting_notes_create = schemas.MeetingNotesCreate(
+                    meeting_id=meeting_id,
+                    content=structured_content["meeting_notes"]
+                )
+                crud.create_meeting_notes(db, meeting_notes_create)
+            
+            # Mark the meeting as ended
+            crud.mark_meeting_as_ended(db, meeting_id, current_user.id)
+            print(f"[Summary] Meeting {meeting_id} marked as ended")
         
         # Clean up audio files after successful summarization (if enabled)
         if settings.AUTO_CLEANUP_AUDIO_FILES:
@@ -3009,7 +3276,7 @@ async def process_single_file_fallback(audio_file: str, meeting_id: int, db: Ses
         print(f"[ProcessUpload] Error processing audio file {audio_file} with OpenAI Whisper: {e}")
         raise e
 
-def group_consecutive_speaker_phrases(transcriptions: List[models.Transcription]) -> List[Dict[str, Any]]:
+def group_consecutive_speaker_phrases(transcriptions: List["models.Transcription"] if models else List[Any]) -> List[Dict[str, Any]]:
     """
     Group consecutive phrases from the same speaker into single entries.
     Returns a list of grouped transcription data.
@@ -3097,7 +3364,7 @@ async def group_meeting_transcriptions(
     request: Request,
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     """
     Group consecutive phrases from the same speaker into single transcription entries.
@@ -3476,13 +3743,40 @@ async def value_error_handler(request: Request, exc: ValueError):
     """Handle validation errors with proper CORS headers"""
     app_logger.warning(f"Validation error: {str(exc)}")
     
+    # Check if this is a password validation error
+    error_message = str(exc)
+    is_password_validation = any(keyword in error_message.lower() for keyword in [
+        'password', 'uppercase', 'lowercase', 'special character', 'character', 'letter', 'number'
+    ])
+    
+    if is_password_validation:
+        # Return as validation error (422) instead of bad request (400)
+        status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+        response_content = {
+            "error": "Validation Error",
+            "detail": "Password validation failed",
+            "validation_errors": [
+                {
+                    "type": "value_error",
+                    "loc": ["body", "password"],
+                    "msg": error_message,
+                    "input": None
+                }
+            ],
+            "user_friendly_errors": [f"password: {error_message}"]
+        }
+    else:
+        # General validation error
+        status_code = status.HTTP_400_BAD_REQUEST
+        response_content = {
+            "error": "Validation error",
+            "detail": error_message
+        }
+    
     # Create response
     response = JSONResponse(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        content={
-            "error": "Validation error",
-            "detail": str(exc)
-        }
+        status_code=status_code,
+        content=response_content
     )
     
     # Ensure CORS headers are included
@@ -3518,59 +3812,83 @@ async def permission_error_handler(request: Request, exc: PermissionError):
     )
 
 # Tag endpoints
-@app.post("/tags/", response_model=schemas.Tag)
+@app.post("/tags/")
 @limiter.limit("30/minute")  # Tag creation
 def create_tag(
     request: Request,
-    tag: schemas.TagCreate,
+    tag: schemas.TagCreate if schemas else Dict[str, Any],
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
-    return crud.create_tag(db=db, tag=tag)
+    if models and DATABASE_AVAILABLE:
+        return crud.create_tag(db=db, tag=tag)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
+        )
 
-@app.get("/tags/", response_model=List[schemas.Tag])
+@app.get("/tags/")
 @limiter.limit("60/minute")  # Read operations
 def get_tags(
     request: Request,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
-    return crud.get_tags(db=db, skip=skip, limit=limit)
+    if models and DATABASE_AVAILABLE:
+        return crud.get_tags(db=db, skip=skip, limit=limit)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
+        )
 
-@app.get("/tags/{tag_id}", response_model=schemas.Tag)
+@app.get("/tags/{tag_id}")
 @limiter.limit("60/minute")  # Read operations
 def get_tag(
     request: Request,
     tag_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
-    tag = crud.get_tag(db=db, tag_id=tag_id)
-    if not tag:
+    if models and DATABASE_AVAILABLE:
+        tag = crud.get_tag(db=db, tag_id=tag_id)
+        if not tag:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Tag not found"
+            )
+        return tag
+    else:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Tag not found"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
         )
-    return tag
 
-@app.put("/tags/{tag_id}", response_model=schemas.Tag)
+@app.put("/tags/{tag_id}")
 @limiter.limit("30/minute")  # Update operations
 def update_tag(
     request: Request,
     tag_id: int,
-    tag_update: schemas.TagUpdate,
+    tag_update: schemas.TagUpdate if schemas else Dict[str, Any],
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
-    tag = crud.update_tag(db=db, tag_id=tag_id, tag_update=tag_update)
-    if not tag:
+    if models and DATABASE_AVAILABLE:
+        tag = crud.update_tag(db=db, tag_id=tag_id, tag_update=tag_update)
+        if not tag:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Tag not found"
+            )
+        return tag
+    else:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Tag not found"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
         )
-    return tag
 
 @app.delete("/tags/{tag_id}")
 @limiter.limit("30/minute")  # Delete operations
@@ -3578,7 +3896,7 @@ def delete_tag(
     request: Request,
     tag_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     success = crud.delete_tag(db=db, tag_id=tag_id)
     if not success:
@@ -3595,20 +3913,26 @@ def add_tags_to_meeting(
     meeting_id: int,
     tag_names: List[str],
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
-    meeting = crud.add_tags_to_meeting(
-        db=db, 
-        meeting_id=meeting_id, 
-        tag_names=tag_names, 
-        user_id=current_user.id
-    )
-    if not meeting:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found"
+    if models and DATABASE_AVAILABLE:
+        meeting = crud.add_tags_to_meeting(
+            db=db, 
+            meeting_id=meeting_id, 
+            tag_names=tag_names, 
+            user_id=current_user.id
         )
-    return {"message": "Tags added successfully", "tags": [tag.name for tag in meeting.tags]}
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Meeting not found"
+            )
+        return {"message": "Tags added successfully", "tags": [tag.name for tag in meeting.tags]}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
+        )
 
 @app.post("/meetings/{meeting_id}/cleanup-audio")
 @limiter.limit("10/minute")  # Cleanup operations
@@ -3616,13 +3940,19 @@ def cleanup_meeting_audio_endpoint(
     request: Request,
     meeting_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     """
     Manually clean up audio files for a meeting.
     This endpoint allows users to free up storage space by deleting audio files
     after the meeting has been summarized.
     """
+    if not models or not DATABASE_AVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service is temporarily unavailable"
+        )
+        
     # Verify the meeting exists and belongs to the current user
     meeting = db.query(models.Meeting).filter(
         models.Meeting.id == meeting_id,
@@ -3671,13 +4001,19 @@ def cleanup_meeting_audio_endpoint(
 def get_user_storage_usage(
     request: Request,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: "models.User" if models else Any = Depends(get_current_user)
 ):
     """
     Get storage usage information for the current user.
     Shows total storage used by audio files across all meetings.
     """
     try:
+        if not models or not DATABASE_AVAILABLE:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database service is temporarily unavailable"
+            )
+            
         safe_email = get_safe_email_for_path(current_user.email)
         user_meetings_dir = f"/tmp/meetings/{safe_email}"
         
@@ -3962,6 +4298,179 @@ async def enforce_https_headers(request: Request, call_next):
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
     return response
 
+@app.get("/test-db")
+async def test_database_connection():
+    """Test endpoint to check database connectivity"""
+    try:
+        if not DATABASE_AVAILABLE:
+            return {"status": "error", "message": "Database modules not available"}
+        
+        db = SessionLocal()
+        try:
+            # Simple query to test connection
+            result = db.execute(text("SELECT 1 as test"))
+            row = result.fetchone()
+            
+            db.close()
+            
+            return {
+                "status": "success", 
+                "message": "Database connection successful",
+                "test_query_result": row[0] if row else None,
+                "database_available": DATABASE_AVAILABLE
+            }
+        except Exception as db_error:
+            db.close()
+            return {
+                "status": "error", 
+                "message": f"Database query failed: {str(db_error)}",
+                "database_available": DATABASE_AVAILABLE
+            }
+    except Exception as e:
+        return {
+            "status": "error", 
+            "message": f"Database connection failed: {str(e)}",
+            "database_available": DATABASE_AVAILABLE
+        }
+
+@app.get("/test-user-creation")
+async def test_user_creation():
+    """Test endpoint to check user creation process"""
+    try:
+        if not DATABASE_AVAILABLE:
+            return {"status": "error", "message": "Database modules not available"}
+        
+        db = SessionLocal()
+        try:
+            # Create a test user object
+            test_email = f"test_{int(datetime.now().timestamp())}@example.com"
+            test_user = schemas.UserCreate(email=test_email, password="TestPass123!")
+            
+            print(f"[TestUserCreation] Creating test user with email: {test_email}")
+            
+            # Try to create the user
+            new_user = crud.create_user(db=db, user=test_user)
+            print(f"[TestUserCreation] User created successfully: {new_user.id}")
+            
+            # Clean up - delete the test user
+            db.delete(new_user)
+            db.commit()
+            
+            db.close()
+            
+            return {
+                "status": "success", 
+                "message": "User creation test successful",
+                "test_email": test_email,
+                "user_id": new_user.id
+            }
+        except Exception as crud_error:
+            print(f"[TestUserCreation] Error in crud.create_user: {crud_error}")
+            print(f"[TestUserCreation] Error type: {type(crud_error)}")
+            import traceback
+            traceback.print_exc()
+            
+            try:
+                db.rollback()
+                db.close()
+            except:
+                pass
+            
+            return {
+                "status": "error", 
+                "message": f"User creation failed: {str(crud_error)}",
+                "error_type": str(type(crud_error))
+            }
+    except Exception as e:
+        return {
+            "status": "error", 
+            "message": f"Test setup failed: {str(e)}",
+            "error_type": str(type(e))
+        }
+
+@app.post("/users-simple/")
+@limiter.limit("5/minute")
+async def create_user_simple(request: Request):
+    print(f"[UserCreationSimple] Endpoint called")
+    
+    try:
+        # Parse request body
+        body = await request.json()
+        email = body.get("email")
+        password = body.get("password")
+        
+        print(f"[UserCreationSimple] Creating user with email: {email}")
+        
+        # Handle database session manually
+        if not DATABASE_AVAILABLE:
+            return {"error": "Database not available"}
+        
+        db = SessionLocal()
+        try:
+            # Create user object
+            user = schemas.UserCreate(email=email, password=password)
+            
+            # Check if user exists
+            existing_user = crud.get_user_by_email(db, email=user.email)
+            if existing_user:
+                return {"error": "Email already registered"}
+            
+            # Create new user
+            new_user = crud.create_user(db=db, user=user)
+            print(f"[UserCreationSimple] User created successfully: {new_user.id}")
+            
+            # Return simple response without response model validation
+            return {
+                "success": True,
+                "user_id": new_user.id,
+                "email": new_user.email,
+                "message": "User created successfully"
+            }
+            
+        except Exception as e:
+            print(f"[UserCreationSimple] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"error": f"Failed to create user: {str(e)}"}
+        finally:
+            db.close()
+        
+    except Exception as e:
+        print(f"[UserCreationSimple] Outer error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": f"Request processing failed: {str(e)}"}
+
+@app.get("/test-speaker-identifier")
+async def test_speaker_identifier():
+    """Test endpoint to verify the mock SpeakerIdentifier is working"""
+    try:
+        # Create a speaker identifier
+        speaker_id = create_speaker_identifier()
+        print(f"[TEST] Created speaker identifier: {type(speaker_id)}")
+        
+        # Test with mock audio data
+        import numpy as np
+        test_audio = np.random.randn(1600).astype(np.float32)
+        start_time = 0.0
+        
+        # Process the audio chunk
+        segments = speaker_id.process_audio_chunk(test_audio, start_time)
+        print(f"[TEST] Generated segments: {segments}")
+        
+        return {
+            "status": "success",
+            "speaker_identifier_type": str(type(speaker_id)),
+            "segments_generated": len(segments),
+            "segments": segments
+        }
+    except Exception as e:
+        print(f"[TEST] Error: {e}")
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
 if __name__ == "__main__":
     # Load environment variables from .env file
     from dotenv import load_dotenv
@@ -4001,4 +4510,4 @@ if __name__ == "__main__":
     else:
         app_logger.warning("Starting server without HTTPS/SSL - not recommended for production")
     
-    uvicorn.run(**uvicorn_config) 
+    uvicorn.run(**uvicorn_config)

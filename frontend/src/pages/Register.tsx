@@ -80,13 +80,31 @@ const Register: React.FC = () => {
         } 
       });
     } catch (err: any) {
-      if (err.response?.data?.detail) {
-        if (Array.isArray(err.response.data.detail)) {
-          // Handle validation errors from Pydantic
-          const errorMessages = err.response.data.detail.map((error: any) => error.msg).join(', ');
-          setError(errorMessages);
-        } else {
-          setError(err.response.data.detail);
+      // Check for different error response formats from the backend
+      if (err.response?.data) {
+        const data = err.response.data;
+        
+        // Check for structured validation errors (Pydantic format)
+        if (data.detail) {
+          if (Array.isArray(data.detail)) {
+            // Handle validation errors from Pydantic
+            const errorMessages = data.detail.map((error: any) => error.msg).join(', ');
+            setError(errorMessages);
+          } else {
+            setError(data.detail);
+          }
+        }
+        // Check for simple error message format
+        else if (data.error) {
+          setError(data.error);
+        }
+        // Check for user-friendly errors array format
+        else if (data.user_friendly_errors && Array.isArray(data.user_friendly_errors)) {
+          setError(data.user_friendly_errors.join(', '));
+        }
+        // Fallback to generic message
+        else {
+          setError('Registration failed. Please try again.');
         }
       } else {
         setError('Registration failed. Please try again.');

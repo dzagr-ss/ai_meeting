@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, validator, Field
+from pydantic import BaseModel, EmailStr, validator, Field, ValidationError
 from typing import Optional, List
 from datetime import datetime
 import re
@@ -60,6 +60,11 @@ class UserCreate(UserBase):
 
     @validator('password')
     def password_strength(cls, v):
+        """Password strength validation using proper Pydantic validation"""
+        if not v:
+            raise ValueError('Password is required')
+        
+        # Check all requirements and collect errors
         errors = []
         
         if len(v) < 8:
@@ -73,10 +78,12 @@ class UserCreate(UserBase):
         if not re.search(r'\d', v):
             errors.append('Password must contain at least one number')
         if not re.search(r'[!@#$%^&*(),.?":{}|<>]', v):
-            errors.append('Password must contain at least one special character')
+            errors.append('Password must contain at least one special character (!@#$%^&*(),.?":{}|<>)')
         
+        # If there are validation errors, raise them as a single ValueError
+        # This will be properly handled by FastAPI as a 422 validation error
         if errors:
-            raise ValueError(' | '.join(errors))
+            raise ValueError('. '.join(errors))
         
         return v
 
@@ -109,6 +116,11 @@ class PasswordResetConfirm(BaseModel):
 
     @validator('new_password')
     def password_strength(cls, v):
+        """Password strength validation using proper Pydantic validation"""
+        if not v:
+            raise ValueError('Password is required')
+        
+        # Check all requirements and collect errors
         errors = []
         
         if len(v) < 8:
@@ -122,10 +134,11 @@ class PasswordResetConfirm(BaseModel):
         if not re.search(r'\d', v):
             errors.append('Password must contain at least one number')
         if not re.search(r'[!@#$%^&*(),.?":{}|<>]', v):
-            errors.append('Password must contain at least one special character')
+            errors.append('Password must contain at least one special character (!@#$%^&*(),.?":{}|<>)')
         
+        # If there are validation errors, raise them as a single ValueError
         if errors:
-            raise ValueError(' | '.join(errors))
+            raise ValueError('. '.join(errors))
         
         return v
 

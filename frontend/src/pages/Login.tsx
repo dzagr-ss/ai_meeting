@@ -53,7 +53,7 @@ const Login: React.FC = () => {
 
     try {
       const response = await api.post('/token', {
-        username: email,
+        email: email,
         password: password,
       });
 
@@ -61,7 +61,24 @@ const Login: React.FC = () => {
       dispatch(loginSuccess(access_token));
       navigate('/dashboard');
     } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || 'Login failed';
+      // Check for different error response formats from the backend
+      let errorMessage = 'Login failed';
+      if (err.response?.data) {
+        const data = err.response.data;
+        // Check for simple error message format (most common from global exception handler)
+        if (data.error) {
+          errorMessage = data.error;
+        }
+        // Check for structured validation errors (Pydantic format) 
+        else if (data.detail) {
+          errorMessage = data.detail;
+        }
+        // Check for user-friendly errors array format
+        else if (data.user_friendly_errors && Array.isArray(data.user_friendly_errors)) {
+          errorMessage = data.user_friendly_errors.join(', ');
+        }
+      }
+      
       setError(errorMessage);
       dispatch(loginFailure(errorMessage));
     } finally {

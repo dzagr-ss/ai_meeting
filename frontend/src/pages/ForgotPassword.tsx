@@ -31,7 +31,24 @@ const ForgotPassword: React.FC = () => {
       });
       setMessage(response.data.message);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'An error occurred. Please try again.');
+      // Check for different error response formats from the backend
+      let errorMessage = 'An error occurred. Please try again.';
+      if (err.response?.data) {
+        const data = err.response.data;
+        // Check for simple error message format (most common from global exception handler)
+        if (data.error) {
+          errorMessage = data.error;
+        }
+        // Check for structured validation errors (Pydantic format) 
+        else if (data.detail) {
+          errorMessage = data.detail;
+        }
+        // Check for user-friendly errors array format
+        else if (data.user_friendly_errors && Array.isArray(data.user_friendly_errors)) {
+          errorMessage = data.user_friendly_errors.join(', ');
+        }
+      }
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
