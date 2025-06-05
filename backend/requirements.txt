@@ -46,4 +46,4 @@ redis==5.0.1
 itsdangerous==2.2.0
 
 whisperx==3.1.1
-
+PyJWT==2.10.1
