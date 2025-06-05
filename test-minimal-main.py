@@ -31,6 +31,18 @@ except Exception as e:
     print(f"❌ Uvicorn import failed: {e}")
     sys.exit(1)
 
+# Test WebSocket support
+try:
+    import websockets
+    print(f"✅ WebSockets library: {websockets.__version__}")
+except ImportError:
+    try:
+        import wsproto
+        print(f"✅ WSProto library: {wsproto.__version__}")
+    except ImportError:
+        print("⚠️  WARNING: No WebSocket library found. WebSocket functionality will be limited.")
+        print("📦 To fix: pip install websockets")
+
 # Test pydantic import
 try:
     # Compatible imports for both Pydantic v1 and v2

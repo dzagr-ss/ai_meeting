@@ -2,12 +2,13 @@
 # Removes heavy audio processing libraries to avoid build timeouts
 
 # Core web framework
-fastapi==0.104.1
-uvicorn==0.24.0
+fastapi==0.115.12
+uvicorn[standard]==0.32.1
 python-multipart==0.0.6
-pydantic==2.5.2
-pydantic-settings==2.1.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
 python-dotenv==1.0.0
+websockets==12.0
 
 # Essential dependencies
 itsdangerous==2.1.2
