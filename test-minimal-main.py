@@ -10,6 +10,8 @@ import logging
 import base64
 import json
 import time
+import tempfile
+import io
 
 print("=== Minimal FastAPI Test Starting ===")
 print(f"Python version: {sys.version}")
@@ -30,6 +32,24 @@ try:
 except Exception as e:
     print(f"❌ Uvicorn import failed: {e}")
     sys.exit(1)
+
+# Test OpenAI import for transcription
+try:
+    import openai
+    print(f"✅ OpenAI: {openai.__version__}")
+    # Set up OpenAI client
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if openai_api_key:
+        openai.api_key = openai_api_key
+        print("✅ OpenAI API key configured")
+    else:
+        print("⚠️  WARNING: OPENAI_API_KEY not set - transcription will use mock responses")
+except ImportError:
+    print("⚠️  WARNING: OpenAI not available - transcription will use mock responses")
+    openai = None
+except Exception as e:
+    print(f"⚠️  WARNING: OpenAI setup failed: {e} - transcription will use mock responses")
+    openai = None
 
 # Test WebSocket support
 try:
@@ -266,7 +286,7 @@ async def get_meeting_details(meeting_id: int):
 # Add missing transcription endpoint before the WebSocket endpoint
 @app.post("/meetings/{meeting_id}/transcribe")
 async def transcribe_audio(meeting_id: int, request: Request):
-    """Transcribe audio for a meeting"""
+    """Transcribe audio for a meeting using OpenAI Whisper API"""
     auth_header = request.headers.get("authorization", "")
     print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Auth header: {auth_header[:50]}..." if auth_header else f"[DEBUG] POST /meetings/{meeting_id}/transcribe - No auth header")
     
@@ -275,13 +295,17 @@ async def transcribe_audio(meeting_id: int, request: Request):
         content_type = request.headers.get("content-type", "")
         print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Content-Type: {content_type}")
         
+        audio_data = None
+        audio_filename = "audio.webm"  # Default filename
+        
         if "multipart/form-data" in content_type:
             # Handle form data (file upload)
             form = await request.form()
             audio_file = form.get("audio")
             if audio_file:
                 audio_data = await audio_file.read()
-                print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Received {len(audio_data)} bytes via form")
+                audio_filename = getattr(audio_file, 'filename', 'audio.webm')
+                print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Received {len(audio_data)} bytes via form, filename: {audio_filename}")
             else:
                 print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - No audio file in form data")
                 audio_data = b""
@@ -290,17 +314,84 @@ async def transcribe_audio(meeting_id: int, request: Request):
             audio_data = await request.body()
             print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Received {len(audio_data)} bytes via body")
         
-        # Mock transcription response (in real implementation, this would use Whisper/speech recognition)
+        if not audio_data or len(audio_data) < 1000:  # At least 1KB of data
+            return {
+                "success": False,
+                "error": "No audio data received or audio too short",
+                "message": "Please provide valid audio data"
+            }
+        
+        # Try real transcription with OpenAI Whisper API
+        transcription_text = "This is a mock transcription of the audio recording."
+        confidence = 0.95
+        
+        if openai and os.getenv("OPENAI_API_KEY"):
+            try:
+                print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Starting OpenAI Whisper transcription...")
+                
+                # Create a temporary file for the audio data
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_audio_file:
+                    temp_audio_file.write(audio_data)
+                    temp_audio_path = temp_audio_file.name
+                
+                try:
+                    # Use OpenAI Whisper API for transcription
+                    with open(temp_audio_path, 'rb') as audio_file:
+                        # Create OpenAI client (v1.0+ API)
+                        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                        
+                        response = client.audio.transcriptions.create(
+                            model="whisper-1",
+                            file=audio_file,
+                            response_format="verbose_json"  # Get timestamps and confidence
+                        )
+                    
+                    # Extract transcription results
+                    if hasattr(response, 'text'):
+                        transcription_text = response.text.strip()
+                        if hasattr(response, 'segments') and response.segments:
+                            # Calculate average confidence from segments
+                            confidences = [seg.get('avg_logprob', 0) for seg in response.segments if 'avg_logprob' in seg]
+                            if confidences:
+                                # Convert log prob to confidence (approximate)
+                                confidence = min(0.99, max(0.1, sum(confidences) / len(confidences) + 1.0))
+                        
+                        print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - OpenAI transcription successful: '{transcription_text[:100]}...'")
+                    else:
+                        print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - OpenAI response format unexpected")
+                        transcription_text = "Transcription completed but text not accessible."
+                        
+                finally:
+                    # Clean up temporary file
+                    try:
+                        os.unlink(temp_audio_path)
+                    except:
+                        pass
+                        
+            except Exception as openai_error:
+                print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - OpenAI transcription failed: {openai_error}")
+                print(f"[DEBUG] Falling back to mock transcription")
+                transcription_text = f"Transcription failed with OpenAI: {str(openai_error)}"
+                confidence = 0.1
+        else:
+            print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Using mock transcription (OpenAI not available)")
+        
+        # Calculate audio duration estimate (assume 16kHz, 16-bit audio)
+        estimated_duration = len(audio_data) / (16000 * 2)  # bytes / (sample_rate * bytes_per_sample)
+        
+        # Create transcription response
         transcription = {
             "id": int(time.time()) % 10000,
             "meeting_id": meeting_id,
-            "text": "This is a mock transcription of the audio recording.",
+            "text": transcription_text,
             "timestamp": time.time(),
-            "speaker": "Speaker 1",
-            "confidence": 0.95,
+            "speaker": "Speaker 1",  # In real implementation, this could use speaker diarization
+            "confidence": confidence,
             "start_time": 0.0,
-            "end_time": len(audio_data) / 16000.0 if audio_data else 1.0,  # Assume 16kHz sample rate
-            "audio_duration": len(audio_data) / 16000.0 if audio_data else 1.0
+            "end_time": estimated_duration,
+            "audio_duration": estimated_duration,
+            "audio_size_bytes": len(audio_data),
+            "processing_method": "openai_whisper" if (openai and os.getenv("OPENAI_API_KEY")) else "mock"
         }
         
         print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Returning transcription: {transcription}")
@@ -313,6 +404,8 @@ async def transcribe_audio(meeting_id: int, request: Request):
         
     except Exception as e:
         print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Error: {e}")
+        import traceback
+        print(f"[DEBUG] Full traceback: {traceback.format_exc()}")
         return {
             "success": False,
             "error": "Failed to transcribe audio",
