@@ -263,13 +263,69 @@ async def get_meeting_details(meeting_id: int):
         "tags": []
     }
 
+# Add missing transcription endpoint before the WebSocket endpoint
+@app.post("/meetings/{meeting_id}/transcribe")
+async def transcribe_audio(meeting_id: int, request: Request):
+    """Transcribe audio for a meeting"""
+    auth_header = request.headers.get("authorization", "")
+    print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Auth header: {auth_header[:50]}..." if auth_header else f"[DEBUG] POST /meetings/{meeting_id}/transcribe - No auth header")
+    
+    try:
+        # Get the audio data from the request
+        content_type = request.headers.get("content-type", "")
+        print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Content-Type: {content_type}")
+        
+        if "multipart/form-data" in content_type:
+            # Handle form data (file upload)
+            form = await request.form()
+            audio_file = form.get("audio")
+            if audio_file:
+                audio_data = await audio_file.read()
+                print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Received {len(audio_data)} bytes via form")
+            else:
+                print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - No audio file in form data")
+                audio_data = b""
+        else:
+            # Handle raw binary data
+            audio_data = await request.body()
+            print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Received {len(audio_data)} bytes via body")
+        
+        # Mock transcription response (in real implementation, this would use Whisper/speech recognition)
+        transcription = {
+            "id": int(time.time()) % 10000,
+            "meeting_id": meeting_id,
+            "text": "This is a mock transcription of the audio recording.",
+            "timestamp": time.time(),
+            "speaker": "Speaker 1",
+            "confidence": 0.95,
+            "start_time": 0.0,
+            "end_time": len(audio_data) / 16000.0 if audio_data else 1.0,  # Assume 16kHz sample rate
+            "audio_duration": len(audio_data) / 16000.0 if audio_data else 1.0
+        }
+        
+        print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Returning transcription: {transcription}")
+        
+        return {
+            "success": True,
+            "transcription": transcription,
+            "message": "Audio transcribed successfully"
+        }
+        
+    except Exception as e:
+        print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Error: {e}")
+        return {
+            "success": False,
+            "error": "Failed to transcribe audio",
+            "message": str(e)
+        }
+
 # Add a test endpoint to check WebSocket readiness
 @app.get("/ws/test")
 async def websocket_test():
     """Test endpoint to verify WebSocket routes are working"""
     return {"message": "WebSocket routing is working", "available_endpoints": ["/ws/meetings/{meeting_id}/stream"]}
 
-# Add WebSocket endpoint for audio streaming
+# Add WebSocket endpoint for audio streaming - IMPROVED ERROR HANDLING
 @app.websocket("/ws/meetings/{meeting_id}/stream")
 async def websocket_endpoint(websocket: WebSocket, meeting_id: int):
     """WebSocket endpoint for real-time audio streaming"""
@@ -291,34 +347,92 @@ async def websocket_endpoint(websocket: WebSocket, meeting_id: int):
         
         while True:
             try:
-                # Wait for data from client
-                data = await websocket.receive_text()
-                print(f"[DEBUG] Received text data: {data[:100]}...")
+                # Try to receive any type of data
+                message = await websocket.receive()
+                print(f"[DEBUG] Received message type: {message.get('type', 'unknown')}")
                 
-                # Echo back acknowledgment
-                response = {
-                    "type": "message_received",
-                    "data_length": len(data),
-                    "timestamp": time.time()
-                }
-                await websocket.send_text(json.dumps(response))
-                
-            except Exception as recv_error:
-                print(f"[DEBUG] Error receiving data: {recv_error}")
-                # Try to receive bytes instead
-                try:
-                    data = await websocket.receive_bytes()
-                    print(f"[DEBUG] Received {len(data)} bytes of audio data")
+                if message["type"] == "websocket.receive":
+                    if "text" in message:
+                        # Handle text message (JSON control messages)
+                        text_data = message["text"]
+                        print(f"[DEBUG] Received text message: {text_data[:100]}...")
+                        
+                        try:
+                            # Try to parse as JSON
+                            json_data = json.loads(text_data)
+                            msg_type = json_data.get("type", "unknown")
+                            
+                            if msg_type == "auth":
+                                print(f"[DEBUG] Received auth message")
+                                auth_response = {
+                                    "type": "auth_response",
+                                    "status": "success",
+                                    "message": "Authentication successful",
+                                    "timestamp": time.time()
+                                }
+                                await websocket.send_text(json.dumps(auth_response))
+                                
+                            elif msg_type == "ping":
+                                print(f"[DEBUG] Received ping, sending pong")
+                                pong_response = {
+                                    "type": "pong",
+                                    "timestamp": time.time()
+                                }
+                                await websocket.send_text(json.dumps(pong_response))
+                                
+                            else:
+                                # Generic acknowledgment
+                                response = {
+                                    "type": "message_received",
+                                    "received_type": msg_type,
+                                    "data_length": len(text_data),
+                                    "timestamp": time.time()
+                                }
+                                await websocket.send_text(json.dumps(response))
+                                
+                        except json.JSONDecodeError:
+                            print(f"[DEBUG] Received non-JSON text data")
+                            response = {
+                                "type": "text_received",
+                                "data_length": len(text_data),
+                                "timestamp": time.time()
+                            }
+                            await websocket.send_text(json.dumps(response))
                     
-                    response = {
-                        "type": "audio_received",
-                        "bytes_received": len(data),
+                    elif "bytes" in message:
+                        # Handle binary message (audio data)
+                        audio_data = message["bytes"]
+                        print(f"[DEBUG] Received {len(audio_data)} bytes of audio data")
+                        
+                        # Send binary acknowledgment as text (JSON)
+                        response = {
+                            "type": "audio_received",
+                            "bytes_received": len(audio_data),
+                            "timestamp": time.time(),
+                            "meeting_id": meeting_id
+                        }
+                        await websocket.send_text(json.dumps(response))
+                        
+                elif message["type"] == "websocket.disconnect":
+                    print(f"[DEBUG] WebSocket disconnect message received")
+                    break
+                    
+            except WebSocketDisconnect:
+                print(f"[DEBUG] WebSocket disconnected normally for meeting {meeting_id}")
+                break
+            except Exception as recv_error:
+                print(f"[DEBUG] Error processing WebSocket message: {recv_error}")
+                print(f"[DEBUG] Message: {message}")
+                # Send error response
+                try:
+                    error_response = {
+                        "type": "error",
+                        "message": f"Error processing message: {str(recv_error)}",
                         "timestamp": time.time()
                     }
-                    await websocket.send_text(json.dumps(response))
-                    
-                except Exception as bytes_error:
-                    print(f"[DEBUG] Error receiving bytes: {bytes_error}")
+                    await websocket.send_text(json.dumps(error_response))
+                except:
+                    print(f"[DEBUG] Could not send error response")
                     break
                     
     except WebSocketDisconnect:
