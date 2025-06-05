@@ -60,18 +60,24 @@ class UserCreate(UserBase):
 
     @validator('password')
     def password_strength(cls, v):
+        errors = []
+        
         if len(v) < 8:
-            raise ValueError('Password must be at least 8 characters long')
+            errors.append('Password must be at least 8 characters long')
         if len(v) > 128:
-            raise ValueError('Password must be less than 128 characters')
+            errors.append('Password must be less than 128 characters')
         if not re.search(r'[A-Z]', v):
-            raise ValueError('Password must contain at least one uppercase letter')
+            errors.append('Password must contain at least one uppercase letter')
         if not re.search(r'[a-z]', v):
-            raise ValueError('Password must contain at least one lowercase letter')
+            errors.append('Password must contain at least one lowercase letter')
         if not re.search(r'\d', v):
-            raise ValueError('Password must contain at least one number')
+            errors.append('Password must contain at least one number')
         if not re.search(r'[!@#$%^&*(),.?":{}|<>]', v):
-            raise ValueError('Password must contain at least one special character')
+            errors.append('Password must contain at least one special character')
+        
+        if errors:
+            raise ValueError(' | '.join(errors))
+        
         return v
 
 class User(UserBase):
@@ -103,18 +109,24 @@ class PasswordResetConfirm(BaseModel):
 
     @validator('new_password')
     def password_strength(cls, v):
+        errors = []
+        
         if len(v) < 8:
-            raise ValueError('Password must be at least 8 characters long')
+            errors.append('Password must be at least 8 characters long')
         if len(v) > 128:
-            raise ValueError('Password must be less than 128 characters')
+            errors.append('Password must be less than 128 characters')
         if not re.search(r'[A-Z]', v):
-            raise ValueError('Password must contain at least one uppercase letter')
+            errors.append('Password must contain at least one uppercase letter')
         if not re.search(r'[a-z]', v):
-            raise ValueError('Password must contain at least one lowercase letter')
+            errors.append('Password must contain at least one lowercase letter')
         if not re.search(r'\d', v):
-            raise ValueError('Password must contain at least one number')
+            errors.append('Password must contain at least one number')
         if not re.search(r'[!@#$%^&*(),.?":{}|<>]', v):
-            raise ValueError('Password must contain at least one special character')
+            errors.append('Password must contain at least one special character')
+        
+        if errors:
+            raise ValueError(' | '.join(errors))
+        
         return v
 
 # Tag schemas

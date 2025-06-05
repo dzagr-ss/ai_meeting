@@ -1208,6 +1208,26 @@ async def create_user(request: Request, user: schemas.UserCreate, db: Session = 
         })
         return new_user
         
+    except ValidationError as ve:
+        # Handle Pydantic validation errors properly
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "Validation Error",
+                "validation_errors": ve.errors(),
+                "user_friendly_errors": [f"{' -> '.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in ve.errors()]
+            }
+        )
+    except ValueError as ve:
+        # Handle custom validation errors (like password complexity)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "Validation Error", 
+                "detail": str(ve),
+                "user_friendly_errors": [str(ve)]
+            }
+        )
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
