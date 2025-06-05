@@ -1,24 +1,45 @@
-fastapi==0.104.1
-uvicorn==0.24.0
-python-multipart==0.0.6
+# Web framework
+fastapi==0.115.12
+uvicorn[standard]==0.32.1
+
+# Database
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+alembic==1.14.0
+
+# Auth & Security
+pydantic==2.10.4
+pydantic-settings==2.7.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-sqlalchemy==2.0.23
-pydantic==2.5.2
-pydantic-settings==2.1.0
-python-dotenv==1.0.0
-openai==1.3.5
-pyannote.audio==3.1.1
-torch==2.1.0
-torchaudio==2.1.0
-numpy==1.24.3
-soundfile==0.12.1
+python-multipart==0.0.20
+slowapi==0.1.9
+
+# AI/ML - CPU optimized versions
+--index-url https://download.pytorch.org/whl/cpu
+torch==2.1.0+cpu
+torchaudio==2.1.0+cpu
+--index-url https://pypi.org/simple/
+
+# Audio processing
+pydub==0.25.1
 librosa==0.10.1
-speechbrain==0.5.15
-pytorch-lightning==2.1.0
+soundfile==0.12.1
+noisereduce==3.0.3
 
-
+# Speech processing - use lighter versions
 openai-whisper==20240930
-whisperx==3.1.1
+faster-whisper==1.0.3  # Faster alternative to whisperx
+pyannote.audio==3.1.1
+
+# AI APIs
+openai==1.58.1
+google-generativeai==0.8.5
+
+# Utilities
+python-dotenv==1.0.1
 python-magic==0.4.27
-itsdangerous==2.2.0
+cryptography==44.0.3
+email-validator==2.2.0
+numpy==1.26.4
+redis==5.0.1
