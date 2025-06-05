@@ -47,7 +47,7 @@ except Exception as e:
     sys.exit(1)
 
 # Create minimal FastAPI app
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -250,6 +250,33 @@ async def get_meeting_details(meeting_id: int):
         "status": "scheduled",
         "tags": []
     }
+
+# Add WebSocket endpoint for audio streaming
+@app.websocket("/ws/meetings/{meeting_id}/stream")
+async def websocket_endpoint(websocket: WebSocket, meeting_id: int):
+    """WebSocket endpoint for real-time audio streaming"""
+    await websocket.accept()
+    print(f"[DEBUG] WebSocket connected for meeting {meeting_id}")
+    
+    try:
+        while True:
+            # Receive audio data from client
+            data = await websocket.receive_bytes()
+            print(f"[DEBUG] Received {len(data)} bytes of audio data for meeting {meeting_id}")
+            
+            # In a real implementation, this would process the audio data
+            # For testing, we just acknowledge receipt
+            await websocket.send_text(json.dumps({
+                "type": "audio_received",
+                "bytes_received": len(data),
+                "timestamp": time.time()
+            }))
+            
+    except WebSocketDisconnect:
+        print(f"[DEBUG] WebSocket disconnected for meeting {meeting_id}")
+    except Exception as e:
+        print(f"[DEBUG] WebSocket error for meeting {meeting_id}: {e}")
+        await websocket.close()
 
 print("✅ All endpoints registered with CORS support")
 
