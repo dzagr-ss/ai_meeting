@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: stocks-agent-backend
+    env: python
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+    plan: starter  # or standard for more resources
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.12
+      - key: PYTHONUNBUFFERED
+        value: 1
+      - key: PYTHONDONTWRITEBYTECODE
+        value: 1
+      - key: TOKENIZERS_PARALLELISM
+        value: false
+      - key: OMP_NUM_THREADS
+        value: 1
+      - key: MKL_NUM_THREADS
+        value: 1
+    disk:
+      name: storage
+      mountPath: /app/storage
+      sizeGB: 10
