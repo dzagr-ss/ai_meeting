@@ -263,7 +263,14 @@ async def get_meeting_status(meeting_id: int):
 @app.get("/meetings/{meeting_id}/transcriptions")
 async def get_meeting_transcriptions(meeting_id: int):
     """Get transcriptions for a specific meeting"""
-    return []
+    print(f"[DEBUG] GET /meetings/{meeting_id}/transcriptions - Fetching stored transcriptions")
+    
+    # Return stored transcriptions for this meeting
+    stored_transcriptions = transcriptions_storage.get(meeting_id, [])
+    
+    print(f"[DEBUG] GET /meetings/{meeting_id}/transcriptions - Found {len(stored_transcriptions)} transcriptions")
+    
+    return stored_transcriptions
 
 @app.get("/meetings/{meeting_id}/notes")
 async def get_meeting_notes(meeting_id: int):
@@ -282,6 +289,9 @@ async def get_meeting_details(meeting_id: int):
         "status": "scheduled",
         "tags": []
     }
+
+# Add in-memory storage for transcriptions (in production this would be a database)
+transcriptions_storage = {}
 
 # Add missing transcription endpoint before the WebSocket endpoint
 @app.post("/meetings/{meeting_id}/transcribe")
@@ -394,6 +404,22 @@ async def transcribe_audio(meeting_id: int, request: Request):
             "processing_method": "openai_whisper" if (openai and os.getenv("OPENAI_API_KEY")) else "mock"
         }
         
+        # **NEW: Save transcription to in-memory storage**
+        if meeting_id not in transcriptions_storage:
+            transcriptions_storage[meeting_id] = []
+        
+        # Create stored transcription format that matches frontend expectations
+        stored_transcription = {
+            "id": transcription["id"],
+            "meeting_id": meeting_id,
+            "speaker": transcription["speaker"],
+            "text": transcription_text,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime(transcription["timestamp"]))
+        }
+        
+        transcriptions_storage[meeting_id].append(stored_transcription)
+        
+        print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Saved transcription to storage. Total for meeting: {len(transcriptions_storage[meeting_id])}")
         print(f"[DEBUG] POST /meetings/{meeting_id}/transcribe - Returning transcription: {transcription}")
         
         return {
