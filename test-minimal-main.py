@@ -44,7 +44,7 @@ except Exception as e:
     sys.exit(1)
 
 # Create minimal FastAPI app
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
@@ -124,23 +124,32 @@ async def test_cors():
 @app.post("/token")
 async def token_endpoint():
     """Basic token endpoint for testing authentication"""
+    # Return a more realistic JWT-like token structure
     return {
-        "access_token": "test_token_for_development",
-        "token_type": "bearer",
-        "message": "This is a test token endpoint. Full authentication available in complete application."
+        "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0QGV4YW1wbGUuY29tIiwiZXhwIjoxNzMzMzQ5MjAwfQ.test_signature_for_development",
+        "token_type": "bearer"
     }
 
 # Add basic meetings endpoints
 @app.get("/meetings/")
-async def get_meetings():
+async def get_meetings(request: Request):
     """Basic meetings list endpoint - returns array directly"""
+    # Check for authorization header (but accept any value for testing)
+    auth_header = request.headers.get("authorization", "")
+    print(f"[DEBUG] GET /meetings/ - Auth header: {auth_header[:50]}..." if auth_header else "[DEBUG] GET /meetings/ - No auth header")
+    
     # Return an empty array directly (what frontend expects)
     meetings = []
     return meetings
 
 @app.post("/meetings/")
-async def create_meeting():
-    """Basic meeting creation endpoint"""
+async def create_meeting(request: Request):
+    """Basic meeting creation endpoint with mock authentication"""
+    # Check for authorization header (but accept any value for testing)
+    auth_header = request.headers.get("authorization", "")
+    print(f"[DEBUG] POST /meetings/ - Auth header: {auth_header[:50]}..." if auth_header else "[DEBUG] POST /meetings/ - No auth header")
+    
+    # Mock meeting creation - accept any Authorization header
     meeting = {
         "id": 1,
         "title": "Test Meeting",
