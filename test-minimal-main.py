@@ -7,6 +7,8 @@ Only includes essential imports and health endpoints
 import sys
 import os
 import logging
+import base64
+import json
 
 print("=== Minimal FastAPI Test Starting ===")
 print(f"Python version: {sys.version}")
@@ -125,9 +127,30 @@ async def test_cors():
 @app.post("/token")
 async def token_endpoint():
     """Basic token endpoint for testing authentication"""
-    # Return a more realistic JWT-like token structure
+    # Create a proper JWT structure that can be parsed by JWT libraries
+    header = {
+        "typ": "JWT",
+        "alg": "HS256"
+    }
+    
+    payload = {
+        "sub": "test@example.com",
+        "exp": 1733349200,  # Future expiration
+        "iat": 1733262800,  # Issued at
+        "user_id": 1,
+        "email": "test@example.com"
+    }
+    
+    # Base64 encode header and payload (like a real JWT)
+    header_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip('=')
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=')
+    signature = "test_signature_for_development"
+    
+    # Construct proper JWT token
+    jwt_token = f"{header_b64}.{payload_b64}.{signature}"
+    
     return {
-        "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0QGV4YW1wbGUuY29tIiwiZXhwIjoxNzMzMzQ5MjAwfQ.test_signature_for_development",
+        "access_token": jwt_token,
         "token_type": "bearer"
     }
 
