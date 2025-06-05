@@ -22,15 +22,16 @@ const App: React.FC = () => {
   const [tokenExpiredMessage, setTokenExpiredMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    // Listen for token expiration events
-    const handleTokenExpired = (event: CustomEvent) => {
+    // Listen for authentication error events
+    const handleAuthError = (event: CustomEvent) => {
       setTokenExpiredMessage(event.detail.message);
+      // Don't redirect automatically - let the user choose
     };
 
-    window.addEventListener('tokenExpired', handleTokenExpired as EventListener);
+    window.addEventListener('authError', handleAuthError as EventListener);
 
     return () => {
-      window.removeEventListener('tokenExpired', handleTokenExpired as EventListener);
+      window.removeEventListener('authError', handleAuthError as EventListener);
     };
   }, []);
 

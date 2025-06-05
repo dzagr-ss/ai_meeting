@@ -112,8 +112,25 @@ const Dashboard: React.FC = () => {
     try {
       const response = await api.post('/meetings/', { title: newMeetingTitle });
       navigate(`/meeting/${response.data.id}`);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to create meeting:', err);
+      
+      // Handle authentication errors specifically
+      if (err.response?.status === 401) {
+        setSnackbar({
+          open: true,
+          message: 'Authentication failed. Please log in again.',
+          severity: 'error',
+        });
+      } else {
+        // Handle other errors
+        const errorMessage = err.response?.data?.detail || 'Failed to create meeting. Please try again.';
+        setSnackbar({
+          open: true,
+          message: errorMessage,
+          severity: 'error',
+        });
+      }
     }
   };
 

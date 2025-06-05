@@ -218,9 +218,10 @@ api.interceptors.response.use(
     return response;
   },
   (error: AxiosError) => {
-    // Check if error is due to token expiration
+    // Log the error for debugging but don't auto-redirect
     if (error.response?.status === 401) {
       const errorDetail = (error.response.data as any)?.detail;
+      console.log('Authentication error detected:', errorDetail);
       
       // Check for token expiration or authentication failure
       if (
@@ -229,22 +230,23 @@ api.interceptors.response.use(
         errorDetail === 'Invalid token' ||
         error.response.statusText === 'Unauthorized'
       ) {
-        console.log('Token expired or invalid, logging out user');
+        console.log('Token expired or invalid - but NOT redirecting automatically');
         
-        // Dispatch logout action
+        // Dispatch logout action to clear the token
         store.dispatch(logout());
         
-        // Redirect to login page
-        window.location.href = '/login';
-        
-        // Show user-friendly message
-        const event = new CustomEvent('tokenExpired', {
-          detail: { message: 'Your session has expired. Please log in again.' }
+        // Show user-friendly message but DON'T redirect
+        const event = new CustomEvent('authError', {
+          detail: { 
+            message: 'Your session has expired. Please log in again.',
+            shouldRedirect: false
+          }
         });
         window.dispatchEvent(event);
       }
     }
     
+    // Always reject the error so components can handle it
     return Promise.reject(error);
   }
 );
@@ -266,34 +268,43 @@ export const isTokenExpired = (token: string | null): boolean => {
 };
 
 // Utility function to handle token expiration manually (for fetch calls)
-export const handleTokenExpiration = (response: Response) => {
+export const handleTokenExpiration = (response: Response, shouldRedirect: boolean = false) => {
   if (response.status === 401) {
-    console.log('Token expired (fetch), logging out user');
+    console.log('Token expired (fetch) - logging out user but not redirecting automatically');
     
     // Dispatch logout action
     store.dispatch(logout());
     
-    // Redirect to login page
-    window.location.href = '/login';
+    if (shouldRedirect) {
+      // Only redirect if explicitly requested
+      window.location.href = '/login';
+    }
     
     // Show user-friendly message
-    const event = new CustomEvent('tokenExpired', {
-      detail: { message: 'Your session has expired. Please log in again.' }
+    const event = new CustomEvent('authError', {
+      detail: { 
+        message: 'Your session has expired. Please log in again.',
+        shouldRedirect: shouldRedirect
+      }
     });
     window.dispatchEvent(event);
   }
 };
 
 // Enhanced fetch wrapper that handles token expiration
-export const fetchWithAuth = async (url: string, options: RequestInit = {}): Promise<Response> => {
+export const fetchWithAuth = async (url: string, options: RequestInit = {}, shouldRedirect: boolean = false): Promise<Response> => {
   const state = store.getState();
   const token = state.auth.token;
   
   // Check if token is expired before making request
   if (isTokenExpired(token)) {
-    console.log('Token is expired, logging out user');
+    console.log('Token is expired - logging out user but not redirecting automatically');
     store.dispatch(logout());
-    window.location.href = '/login';
+    
+    if (shouldRedirect) {
+      window.location.href = '/login';
+    }
+    
     throw new Error('Token expired');
   }
   
@@ -311,8 +322,8 @@ export const fetchWithAuth = async (url: string, options: RequestInit = {}): Pro
     credentials: 'omit', // Don't send credentials for security
   });
   
-  // Handle token expiration
-  handleTokenExpiration(response);
+  // Handle token expiration but don't auto-redirect unless requested
+  handleTokenExpiration(response, shouldRedirect);
   
   return response;
 };
