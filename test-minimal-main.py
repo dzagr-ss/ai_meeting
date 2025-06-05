@@ -9,6 +9,7 @@ import os
 import logging
 import base64
 import json
+import time
 
 print("=== Minimal FastAPI Test Starting ===")
 print(f"Python version: {sys.version}")
@@ -135,8 +136,8 @@ async def token_endpoint():
     
     payload = {
         "sub": "test@example.com",
-        "exp": 1733349200,  # Future expiration
-        "iat": 1733262800,  # Issued at
+        "exp": int(time.time()) + 86400,  # Expires in 24 hours from now
+        "iat": int(time.time()),  # Issued now
         "user_id": 1,
         "email": "test@example.com"
     }
