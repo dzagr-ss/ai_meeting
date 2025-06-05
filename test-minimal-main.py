@@ -212,6 +212,45 @@ async def get_tags():
     tags = []
     return tags
 
+# Add meeting-specific endpoints that the frontend needs
+@app.get("/meetings/{meeting_id}/summaries")
+async def get_meeting_summaries(meeting_id: int):
+    """Get summaries for a specific meeting"""
+    return []
+
+@app.get("/meetings/{meeting_id}/status")
+async def get_meeting_status(meeting_id: int):
+    """Get status for a specific meeting"""
+    return {
+        "id": meeting_id,
+        "status": "scheduled", 
+        "is_ended": False,
+        "active_participants": 0
+    }
+
+@app.get("/meetings/{meeting_id}/transcriptions")
+async def get_meeting_transcriptions(meeting_id: int):
+    """Get transcriptions for a specific meeting"""
+    return []
+
+@app.get("/meetings/{meeting_id}/notes")
+async def get_meeting_notes(meeting_id: int):
+    """Get notes for a specific meeting"""
+    return []
+
+@app.get("/meetings/{meeting_id}")
+async def get_meeting_details(meeting_id: int):
+    """Get details for a specific meeting"""
+    return {
+        "id": meeting_id,
+        "title": "Test Meeting",
+        "description": None,
+        "start_time": "2025-06-04T21:20:00Z",
+        "end_time": None,
+        "status": "scheduled",
+        "tags": []
+    }
+
 print("✅ All endpoints registered with CORS support")
 
 if __name__ == "__main__":
