@@ -150,12 +150,10 @@ async def create_meeting(request: Request):
     auth_header = request.headers.get("authorization", "")
     print(f"[DEBUG] POST /meetings/ - Auth header: {auth_header[:50]}..." if auth_header else "[DEBUG] POST /meetings/ - No auth header")
     
-    # Log request body
-    try:
-        body = await request.body()
-        print(f"[DEBUG] POST /meetings/ - Request body: {body.decode('utf-8') if body else 'empty'}")
-    except Exception as e:
-        print(f"[DEBUG] POST /meetings/ - Error reading body: {e}")
+    # Log request info without reading body (which might cause issues)
+    print(f"[DEBUG] POST /meetings/ - Content-Type: {request.headers.get('content-type', 'none')}")
+    print(f"[DEBUG] POST /meetings/ - Method: {request.method}")
+    print(f"[DEBUG] POST /meetings/ - URL: {request.url}")
     
     # Mock meeting creation - accept any Authorization header
     meeting = {
@@ -168,7 +166,6 @@ async def create_meeting(request: Request):
     }
     
     print(f"[DEBUG] POST /meetings/ - Returning meeting: {meeting}")
-    print(f"[DEBUG] POST /meetings/ - Request headers: {dict(request.headers)}")
     
     # Return explicit JSONResponse with status 201 (Created) and custom header
     return JSONResponse(
