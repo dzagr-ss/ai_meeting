@@ -9,18 +9,22 @@ const getApiUrl = (): string => {
     return process.env.REACT_APP_API_URL;
   }
   
+  console.log('API URL:', getApiUrl());
+  console.log('REACT_APP_API_URL env var:', process.env.REACT_APP_API_URL);
+  console.log('NODE_ENV:', process.env.NODE_ENV);
+
   // Development fallback
   if (process.env.NODE_ENV === 'development') {
     return 'http://localhost:8000';
   }
   
-  // Production fallback (you'll need to update this with your Railway URL)
+  // Production fallback (REPLACE THIS WITH YOUR ACTUAL RAILWAY BACKEND URL)
   return 'https://aimeeting.up.railway.app';
 };
 
+// Export the API URL function for use in other components
+export { getApiUrl };
 
-// Export API URL for use in other components
-export const API_URL = getApiUrl();
 // Input validation and sanitization utilities
 export const sanitizeInput = (input: string): string => {
   if (!input) return '';
@@ -165,6 +169,14 @@ const api = axios.create({
   timeout: 30000, // 30 seconds timeout
   withCredentials: false, // Disable credentials for security
 });
+
+// Debug logs - Always show in production for troubleshooting
+console.log('🔧 DEBUG: API Configuration');
+console.log('API URL being used:', getApiUrl());
+console.log('REACT_APP_API_URL env var:', process.env.REACT_APP_API_URL);
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('Axios baseURL:', api.defaults.baseURL);
+console.log('All REACT_APP env vars:', Object.keys(process.env).filter(key => key.startsWith('REACT_APP')));
 
 // Log the API URL for debugging (only in development)
 if (process.env.NODE_ENV === 'development') {

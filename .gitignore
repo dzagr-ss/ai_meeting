@@ -61,3 +61,5 @@ yarn-error.log*
 out/
 build/
 dist/
+
+_CORS_FIXED

@@ -17,7 +17,6 @@ import tempfile
 import shutil
 import subprocess
 import uuid
-import magic
 import hashlib
 import secrets
 import concurrent.futures
@@ -117,6 +116,32 @@ RAILWAY_MAX_FILE_SIZE_MB = 50  # Railway has upload limits
 RAILWAY_MAX_PROCESSING_TIME_SECONDS = 300  # 5 minutes max
 RAILWAY_STORAGE_PATH = "/app/storage"  # Railway volume path
 
+# Try to import magic with fallback
+MAGIC_AVAILABLE = False
+magic = None
+
+def get_magic_module():
+    """Lazy import of magic module with proper error handling"""
+    global magic, MAGIC_AVAILABLE
+    if MAGIC_AVAILABLE:
+        return magic
+    
+    try:
+        import magic as magic_module
+        magic = magic_module
+        MAGIC_AVAILABLE = True
+        print("python-magic library loaded successfully")
+        return magic
+    except ImportError as e:
+        print(f"python-magic library not available: {e}")
+        print("File type detection will use mimetypes fallback")
+        MAGIC_AVAILABLE = False
+        return None
+    except Exception as e:
+        print(f"Error loading python-magic: {e}")
+        print("File type detection will use mimetypes fallback")
+        MAGIC_AVAILABLE = False
+        return None
 
 async def validate_railway_limits(file: UploadFile):
     """Validate file size and type for Railway deployment"""
@@ -285,25 +310,41 @@ async def add_security_headers(request: Request, call_next):
 # CORS middleware with secure configuration
 def get_allowed_origins():
     """Get allowed origins from settings with validation"""
-    # Use settings object instead of direct environment access
-    origins_str = settings.BACKEND_CORS_ORIGINS
-    
-    if origins_str:
-        # Parse comma-separated origins
-        origins = [origin.strip() for origin in origins_str.split(",") if origin.strip()]
+    try:
+        # Use settings object instead of direct environment access
+        origins_str = settings.BACKEND_CORS_ORIGINS
         
-        # Validate origins format
-        validated_origins = []
-        for origin in origins:
-            # Basic URL validation
-            if origin.startswith(("http://", "https://")) or origin == "*":
-                validated_origins.append(origin)
-            else:
-                app_logger.warning(f"Invalid CORS origin format: {origin}")
+        if origins_str:
+            # Parse comma-separated origins (handle semicolons too)
+            origins = []
+            # Replace semicolons with commas and split
+            normalized_str = origins_str.replace(';', ',').replace('\n', ',')
+            for origin in normalized_str.split(","):
+                origin = origin.strip().strip("'").strip('"')  # Remove quotes and whitespace
+                if origin:
+                    origins.append(origin)
+            
+            # Validate origins format
+            validated_origins = []
+            for origin in origins:
+                # Basic URL validation
+                if origin.startswith(("http://", "https://")) or origin == "*":
+                    validated_origins.append(origin)
+                else:
+                    app_logger.warning(f"Invalid CORS origin format: {origin}")
+            
+            if validated_origins:
+                return validated_origins
         
-        return validated_origins
-    else:
-        # Default development origins
+        # Default development origins if nothing valid found
+        return [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+        
+    except Exception as e:
+        app_logger.error(f"Error parsing CORS origins: {e}")
+        # Return safe defaults
         return [
             "http://localhost:3000",
             "http://127.0.0.1:3000",
@@ -334,7 +375,29 @@ app.add_middleware(
 )
 
 # Security headers middleware
-allowed_hosts = ["*"]  # Allow all hosts for Railway health checks
+def get_allowed_hosts():
+    """Get allowed hosts for TrustedHostMiddleware"""
+    if not is_production:
+        return ["*"]  # Allow all in development
+    
+    # In production, allow specific hosts
+    allowed_hosts = [
+        "aimeeting.up.railway.app",  # Railway domain
+        "localhost",  # For health checks
+        "127.0.0.1",  # For health checks
+    ]
+    
+    # Add any additional hosts from environment
+    additional_hosts = os.getenv("ALLOWED_HOSTS", "")
+    if additional_hosts:
+        hosts = [host.strip() for host in additional_hosts.split(",") if host.strip()]
+        allowed_hosts.extend(hosts)
+    
+    return allowed_hosts
+
+allowed_hosts = get_allowed_hosts()
+app_logger.info(f"Allowed hosts: {allowed_hosts}")
+
 app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=allowed_hosts
@@ -1018,12 +1081,17 @@ def get_meeting_transcriptions(
 
 @app.options("/meetings/{meeting_id}/transcribe")
 async def options_transcribe():
+    # Use the same origins as the main CORS middleware
+    allowed_origins = get_allowed_origins()
+    # For simplicity, return the first allowed origin (or * if multiple)
+    origin = allowed_origins[0] if len(allowed_origins) == 1 else "*"
+    
     return {
         "headers": {
-            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Methods": "POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Credentials": "false",
         }
     }
 
