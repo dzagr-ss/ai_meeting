@@ -1,6 +1,17 @@
 # Multi-stage build for Railway deployment
 FROM python:3.10-slim as builder
 
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_TIMEOUT=1000
+ENV PIP_RETRIES=10
+
+# Create app user early
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
 # Install system dependencies for ML libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -15,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt .
+COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -29,8 +40,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user for security
-RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 WORKDIR /app
 
@@ -39,7 +48,7 @@ COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
-COPY backend/ ./
+COPY . /app/
 
 # Create necessary directories and set permissions
 RUN mkdir -p /app/storage /app/logs /app/tmp && \
