@@ -38,6 +38,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libmagic1 \
     file \
+    fontconfig \
+    fonts-dejavu-core \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -50,14 +52,15 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy application code from backend directory
 COPY backend/ .
 
-# Create app user and directories
-RUN groupadd -r appuser && useradd -r -g appuser appuser && \
-    mkdir -p /app/storage /app/logs /app/tmp /app/models && \
-    chown -R appuser:appuser /app
+# Create app user with home directory and proper permissions
+RUN groupadd -r appuser && \
+    useradd -r -g appuser -d /home/appuser -m appuser && \
+    mkdir -p /app/storage /app/logs /app/tmp /app/models /home/appuser/.config /home/appuser/.cache && \
+    chown -R appuser:appuser /app /home/appuser
 
 USER appuser
 
-# Railway-optimized environment variables
+# Railway-optimized environment variables with matplotlib fix
 ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -66,7 +69,9 @@ ENV PYTHONPATH=/app \
     PIP_NO_CACHE_DIR=1 \
     TOKENIZERS_PARALLELISM=false \
     OMP_NUM_THREADS=1 \
-    MKL_NUM_THREADS=1
+    MKL_NUM_THREADS=1 \
+    MPLCONFIGDIR=/home/appuser/.config/matplotlib \
+    HOME=/home/appuser
 
 EXPOSE 8000
 
