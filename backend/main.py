@@ -334,7 +334,7 @@ app.add_middleware(
 )
 
 # Security headers middleware
-allowed_hosts = ["*"] if not is_production else get_allowed_origins()
+allowed_hosts = ["*"]  # Allow all hosts for Railway health checks
 app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=allowed_hosts
