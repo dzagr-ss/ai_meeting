@@ -13,6 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     pkg-config \
+    libmagic1 \
+    libmagic-dev \
+    file \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -28,11 +31,13 @@ RUN pip install --no-cache-dir --no-compile -r requirements.txt
 # Production stage - minimal and optimized
 FROM python:3.10-slim
 
-# Install minimal runtime dependencies
+# Install minimal runtime dependencies including libmagic
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
     curl \
+    libmagic1 \
+    file \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
