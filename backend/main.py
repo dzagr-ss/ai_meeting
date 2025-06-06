@@ -28,6 +28,8 @@ from typing import List, Optional, Dict, Any, Union
 from pathlib import Path
 import re
 from urllib.parse import quote
+import psutil
+import gc
 
 # Suppress passlib bcrypt warning due to bcrypt 4.1+ compatibility issue
 # See: https://github.com/pyca/bcrypt/issues/684
@@ -89,6 +91,20 @@ logging.basicConfig(
     ]
 )
 
+# Railway-specific constants
+RAILWAY_MAX_FILE_SIZE_MB = 50  # Railway has upload limits
+RAILWAY_MAX_PROCESSING_TIME_SECONDS = 300  # 5 minutes max
+RAILWAY_STORAGE_PATH = "/app/storage"  # Railway volume path
+
+
+async def validate_railway_limits(file: UploadFile):
+    """Validate file size and type for Railway deployment"""
+    if file.size > RAILWAY_MAX_FILE_SIZE_MB * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size: {RAILWAY_MAX_FILE_SIZE_MB}MB"
+        )
+    
 # Create specialized loggers
 security_logger = logging.getLogger('security')
 security_handler = logging.FileHandler('security.log')
@@ -2759,6 +2775,57 @@ async def group_meeting_transcriptions(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Transcription grouping failed: {str(e)}"
         )
+
+
+@app.get("/health")
+async def health_check():
+    """Enhanced health check for Railway"""
+    try:
+        # Check database connectivity
+        db = SessionLocal()
+        db.execute("SELECT 1")
+        db.close()
+        
+        # Check memory usage
+        memory = psutil.virtual_memory()
+        memory_usage_percent = memory.percent
+        
+        # Check disk space
+        disk = psutil.disk_usage('/app')
+        disk_usage_percent = (disk.used / disk.total) * 100
+        
+        status = "healthy"
+        if memory_usage_percent > 90:
+            status = "warning_high_memory"
+        if disk_usage_percent > 90:
+            status = "warning_high_disk"
+            
+        return {
+            "status": status,
+            "memory_usage_percent": memory_usage_percent,
+            "disk_usage_percent": disk_usage_percent,
+            "uptime": time.time() - app_start_time
+        }
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)}
+
+@app.get("/metrics")
+async def get_metrics():
+    """System metrics for monitoring"""
+    memory = psutil.virtual_memory()
+    cpu = psutil.cpu_percent(interval=1)
+    
+    return {
+        "memory": {
+            "total": memory.total,
+            "available": memory.available,
+            "percent": memory.percent,
+            "used": memory.used
+        },
+        "cpu_percent": cpu,
+        "model_cache_size": len(_audio_processing_cache)
+    }
+
 
 # File upload security configuration
 ALLOWED_AUDIO_EXTENSIONS = {'.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aac', '.webm'}
