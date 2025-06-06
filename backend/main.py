@@ -242,6 +242,27 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Raw health check that bypasses all FastAPI middleware
+async def raw_health_check(scope, receive, send):
+    """Raw ASGI health check that bypasses all middleware"""
+    if scope["type"] == "http" and scope["path"] == "/health":
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [
+                [b"content-type", b"text/plain"],
+                [b"content-length", b"2"],
+            ],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": b"OK",
+        })
+        return
+    
+    # If not health check, pass to FastAPI
+    await app(scope, receive, send)
+
 # Record app start time for health check uptime calculation
 app_start_time = time.time()
 
@@ -344,28 +365,39 @@ def get_allowed_origins():
                 # Remove specific problematic characters that might be in the string
                 origin = origin.replace('\x00', '').replace('\r', '').replace('\n', '').replace('\t', '')
                 
-                print(f"[CORS DEBUG] Cleaned origin {i}: '{origin}'")
-                print(f"[CORS DEBUG] Cleaned origin {i} repr: {repr(origin)}")
+                # EXTREME FIX: Recreate the string character by character, only keeping valid URL characters
+                cleaned_chars = []
+                for char in origin:
+                    # Only keep characters that are valid in URLs
+                    if char.isalnum() or char in '.-:/_':
+                        cleaned_chars.append(char)
+                    else:
+                        print(f"[CORS DEBUG] Removing invalid char: {repr(char)} (ord: {ord(char)})")
                 
-                if origin:
-                    origins.append(origin)
+                origin = ''.join(cleaned_chars)
+                
+                print(f"[CORS DEBUG] Final cleaned origin {i}: '{origin}'")
+                print(f"[CORS DEBUG] Final cleaned origin {i} repr: {repr(origin)}")
+                
+                if origin and (origin.startswith(("http://", "https://")) or origin == "*"):
+                    # Create a completely new string to avoid any reference issues
+                    clean_origin = str(origin)
+                    origins.append(clean_origin)
+                    print(f"[CORS DEBUG] Added to list: {repr(clean_origin)}")
             
-            print(f"[CORS DEBUG] All cleaned origins: {origins}")
+            print(f"[CORS DEBUG] All cleaned origins list: {origins}")
+            print(f"[CORS DEBUG] All cleaned origins repr: {repr(origins)}")
             
-            # Validate origins format
-            validated_origins = []
+            # Additional safety check - recreate the entire list
+            final_origins = []
             for origin in origins:
-                # Basic URL validation
-                if origin.startswith(("http://", "https://")) or origin == "*":
-                    validated_origins.append(origin)
-                    print(f"[CORS DEBUG] Valid origin added: '{origin}'")
-                else:
-                    app_logger.warning(f"Invalid CORS origin format: {origin}")
-                    print(f"[CORS DEBUG] Invalid origin rejected: '{origin}'")
+                final_origins.append(str(origin))
             
-            print(f"[CORS DEBUG] Final validated origins: {validated_origins}")
-            if validated_origins:
-                return validated_origins
+            print(f"[CORS DEBUG] Final origins list: {final_origins}")
+            print(f"[CORS DEBUG] Final origins repr: {repr(final_origins)}")
+            
+            if final_origins:
+                return final_origins
         
         # Default development origins if nothing valid found
         default_origins = [
@@ -3617,7 +3649,7 @@ if __name__ == "__main__":
     
     # Configure uvicorn with security settings
     uvicorn_config = {
-        "app": "main:app",
+        "app": "main:raw_health_check",  # Use raw health check instead of app
         "host": "0.0.0.0",
         "port": int(os.getenv("PORT", 8000)),
         "reload": os.getenv("ENVIRONMENT", "development") == "development",
@@ -3648,3 +3680,6 @@ if __name__ == "__main__":
             return response
     
     uvicorn.run(**uvicorn_config) 
+
+# Export the raw health check for Railway deployment
+app_instance = raw_health_check
