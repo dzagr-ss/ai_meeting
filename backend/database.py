@@ -15,14 +15,17 @@ SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
 
 # Enhanced engine configuration with security features
 engine_config = {
-    "echo": False,  # Set to True only in development for SQL logging
-    "pool_pre_ping": True,  # Verify connections before use
-    "pool_recycle": 3600,  # Recycle connections every hour
+    "echo": False,
+    "pool_pre_ping": True,
+    "pool_recycle": 1800,  # Reduced from 3600 for Railway
     "poolclass": QueuePool,
-    "pool_size": 10,  # Connection pool size
-    "max_overflow": 20,  # Maximum overflow connections
-    "pool_timeout": 30,  # Timeout for getting connection from pool
-    "connect_args": {}
+    "pool_size": 3,        # Reduced from 10 for Railway
+    "max_overflow": 5,     # Reduced from 20 for Railway
+    "pool_timeout": 10,    # Reduced timeout for faster failover
+    "connect_args": {
+        "connect_timeout": 10,
+        "application_name": "meeting-transcription-app"
+    }
 }
 
 # Add SSL configuration for PostgreSQL if in production
