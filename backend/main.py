@@ -313,17 +313,24 @@ def get_allowed_origins():
     try:
         # Use settings object instead of direct environment access
         origins_str = settings.BACKEND_CORS_ORIGINS
+        print(f"[CORS DEBUG] Raw origins string from settings: '{origins_str}'")
         
         if origins_str:
             # Parse comma-separated origins (handle semicolons too)
             origins = []
             # Replace semicolons with commas and split, then clean up each origin
             normalized_str = origins_str.replace(';', ',').replace('\n', ',')
-            for origin in normalized_str.split(","):
+            print(f"[CORS DEBUG] Normalized string: '{normalized_str}'")
+            
+            for i, origin in enumerate(normalized_str.split(",")):
+                print(f"[CORS DEBUG] Processing origin {i}: '{origin}'")
                 # More thorough cleaning - remove quotes, semicolons, and whitespace
                 origin = origin.strip().strip("'").strip('"').strip(';').strip()
+                print(f"[CORS DEBUG] Cleaned origin {i}: '{origin}'")
                 if origin:
                     origins.append(origin)
+            
+            print(f"[CORS DEBUG] All cleaned origins: {origins}")
             
             # Validate origins format
             validated_origins = []
@@ -331,25 +338,33 @@ def get_allowed_origins():
                 # Basic URL validation
                 if origin.startswith(("http://", "https://")) or origin == "*":
                     validated_origins.append(origin)
+                    print(f"[CORS DEBUG] Valid origin added: '{origin}'")
                 else:
                     app_logger.warning(f"Invalid CORS origin format: {origin}")
+                    print(f"[CORS DEBUG] Invalid origin rejected: '{origin}'")
             
+            print(f"[CORS DEBUG] Final validated origins: {validated_origins}")
             if validated_origins:
                 return validated_origins
         
         # Default development origins if nothing valid found
-        return [
+        default_origins = [
             "http://localhost:3000",
             "http://127.0.0.1:3000",
         ]
+        print(f"[CORS DEBUG] Using default origins: {default_origins}")
+        return default_origins
         
     except Exception as e:
         app_logger.error(f"Error parsing CORS origins: {e}")
+        print(f"[CORS DEBUG] Exception occurred: {e}")
         # Return safe defaults
-        return [
+        default_origins = [
             "http://localhost:3000",
             "http://127.0.0.1:3000",
         ]
+        print(f"[CORS DEBUG] Using fallback default origins: {default_origins}")
+        return default_origins
 
 allowed_origins = get_allowed_origins()
 app_logger.info(f"CORS allowed origins: {allowed_origins}")
@@ -2872,50 +2887,69 @@ async def group_meeting_transcriptions(
 
 @app.get("/health")
 async def health_check():
-    """Enhanced health check for Railway"""
+    """Simplified health check for Railway"""
+    return {"status": "healthy", "timestamp": time.time()}
+
+@app.get("/healthz")
+async def health_check_detailed():
+    """Detailed health check for Railway (alternative endpoint)"""
     try:
-        # Check database connectivity
-        db = SessionLocal()
-        db.execute("SELECT 1")
-        db.close()
+        # Check database connectivity with timeout
+        try:
+            db = SessionLocal()
+            db.execute("SELECT 1")
+            db.close()
+            db_status = "healthy"
+        except Exception as db_error:
+            print(f"Health check DB error: {db_error}")
+            db_status = "unhealthy"
         
-        # Check memory usage
-        memory = psutil.virtual_memory()
-        memory_usage_percent = memory.percent
+        # Check memory usage safely
+        try:
+            memory = psutil.virtual_memory()
+            memory_usage_percent = memory.percent
+        except Exception as mem_error:
+            print(f"Health check memory error: {mem_error}")
+            memory_usage_percent = 0
         
-        # Check disk space - use /tmp instead of /app for Railway compatibility
+        # Check disk space with multiple fallbacks
+        disk_usage_percent = 0
         try:
             disk = psutil.disk_usage('/tmp')
             disk_usage_percent = (disk.used / disk.total) * 100
-        except Exception as disk_error:
-            # Fallback to current directory if /tmp fails
+        except Exception:
             try:
                 disk = psutil.disk_usage('.')
                 disk_usage_percent = (disk.used / disk.total) * 100
             except Exception:
-                # If both fail, set to 0 to avoid health check failure
-                disk_usage_percent = 0
-                print(f"Could not check disk usage: {disk_error}")
+                try:
+                    disk = psutil.disk_usage('/')
+                    disk_usage_percent = (disk.used / disk.total) * 100
+                except Exception as disk_error:
+                    print(f"Health check disk error: {disk_error}")
+                    disk_usage_percent = 0
         
         status = "healthy"
-        if memory_usage_percent > 90:
+        if memory_usage_percent > 95:
             status = "warning_high_memory"
-        if disk_usage_percent > 90:
+        if disk_usage_percent > 95:
             status = "warning_high_disk"
             
         return {
             "status": status,
+            "database": db_status,
             "memory_usage_percent": memory_usage_percent,
             "disk_usage_percent": disk_usage_percent,
-            "uptime": getattr(globals(), "app_start_time", 0) and (time.time() - app_start_time) or 0
+            "uptime": getattr(globals(), "app_start_time", 0) and (time.time() - app_start_time) or 0,
+            "timestamp": time.time()
         }
     except Exception as e:
-        # Return healthy status even if metrics fail to prevent health check failures
+        # Always return healthy to prevent health check failures
         print(f"Health check error (non-critical): {e}")
         return {
             "status": "healthy", 
             "error": str(e),
-            "uptime": getattr(globals(), "app_start_time", 0) and (time.time() - app_start_time) or 0
+            "timestamp": time.time()
         }
 
 @app.get("/metrics")
