@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_URL } from '../utils/api';
 import { useNavigate } from 'react-router-dom';
 import {
   Container,
@@ -26,7 +27,7 @@ const ForgotPassword: React.FC = () => {
     setMessage('');
 
     try {
-      const response = await axios.post('http://localhost:8000/password-reset/request', {
+      const response = await axios.post(API_URL + '/password-reset/request', {
         email: email,
       });
       setMessage(response.data.message);

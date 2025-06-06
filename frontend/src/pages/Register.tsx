@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_URL } from '../utils/api';
 import { useNavigate } from 'react-router-dom';
 import {
   Container,
@@ -68,7 +69,7 @@ const Register: React.FC = () => {
     setLoading(true);
 
     try {
-      await axios.post('http://localhost:8000/users/', {
+      await axios.post(API_URL + '/users/', {
         email: email,
         password: password,
       });

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { API_URL } from '../utils/api';
 import {
   Box,
   Container,
@@ -181,7 +182,7 @@ const MeetingRoom: React.FC = () => {
     
     setLoadingMeeting(true);
     try {
-      const response = await fetchWithAuth(`http://localhost:8000/meetings/`);
+      const response = await fetchWithAuth(`${API_URL}/meetings/`);
       
       if (response.ok) {
         const meetings = await response.json();
@@ -231,7 +232,7 @@ const MeetingRoom: React.FC = () => {
       
       setLoadingStoredTranscriptions(true);
       try {
-        const response = await fetchWithAuth(`http://localhost:8000/meetings/${id}/transcriptions`);
+        const response = await fetchWithAuth(`${API_URL}/meetings/${id}/transcriptions`);
         
         if (response.ok) {
           const data = await response.json();
@@ -307,7 +308,7 @@ const MeetingRoom: React.FC = () => {
     console.log('Refreshing stored transcriptions after speaker refinement...');
     setLoadingStoredTranscriptions(true);
     try {
-      const refreshResponse = await fetchWithAuth(`http://localhost:8000/meetings/${id}/transcriptions`);
+      const refreshResponse = await fetchWithAuth(`${API_URL}/meetings/${id}/transcriptions`);
       
       if (refreshResponse.ok) {
         const data = await refreshResponse.json();

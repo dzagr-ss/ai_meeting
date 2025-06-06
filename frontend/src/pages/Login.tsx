@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_URL } from '../utils/api';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { useAppDispatch } from '../store/hooks';
 import { loginStart, loginSuccess, loginFailure } from '../store/slices/authSlice';
@@ -52,7 +53,7 @@ const Login: React.FC = () => {
     dispatch(loginStart());
 
     try {
-      const response = await axios.post('http://localhost:8000/token', {
+      const response = await axios.post(API_URL + '/token', {
         email: email,
         password,
       });

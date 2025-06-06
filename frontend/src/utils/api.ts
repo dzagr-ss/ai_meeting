@@ -15,9 +15,12 @@ const getApiUrl = (): string => {
   }
   
   // Production fallback (you'll need to update this with your Railway URL)
-  return 'https://your-backend-name.railway.app';
+  return 'https://aimeeting.up.railway.app';
 };
 
+
+// Export API URL for use in other components
+export const API_URL = getApiUrl();
 // Input validation and sanitization utilities
 export const sanitizeInput = (input: string): string => {
   if (!input) return '';
