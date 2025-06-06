@@ -1,14 +1,21 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "backend/Dockerfile"
+buildCommand = "echo 'Building backend...'"
 
 [deploy]
-healthcheckPath = "/"
-healthcheckTimeout = 300
+healthcheckPath = "/health"
+healthcheckTimeout = 100
 restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 10
+restartPolicyMaxRetries = 3
+startCommand = "cd /app && python -m uvicorn main:app --host 0.0.0.0 --port $PORT"
 
 [environments.production.variables]
 PYTHONUNBUFFERED = "1"
 PYTHONDONTWRITEBYTECODE = "1"
-STORAGE_PATH = "/app/storage" 
+STORAGE_PATH = "/app/storage"
+USE_CPU_ONLY = "true"
+WHISPERX_DEVICE = "cpu"
+WHISPERX_BATCH_SIZE = "4"
+WHISPERX_COMPUTE_TYPE = "float32"
+WHISPERX_MODEL_SIZE = "base"
