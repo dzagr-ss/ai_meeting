@@ -1,6 +1,6 @@
 # Web Framework
 fastapi==0.104.1
-uvicorn==0.24.0
+uvicorn[standard]==0.24.0
 slowapi==0.1.9
 python-multipart==0.0.6
 
@@ -19,42 +19,32 @@ pydantic==2.5.2
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
 
-# AI & ML
+# AI & ML Core
 openai==1.3.5
 google-generativeai==0.8.5
-whisper-openai==20231117
-whisperx==3.1.1
-faster-whisper==1.1.1
-transformers==4.52.3
 
-# Audio Processing
-pyannote.audio==3.1.1
+# Audio Processing - Essential only for Railway
 torch==2.1.0
 torchaudio==2.1.0
 numpy==1.24.3
 soundfile==0.12.1
 librosa==0.10.1
-scipy==1.15.3
+scipy==1.14.1
 pydub==0.25.1
-noisereduce==3.0.3
 
-# Machine Learning
-speechbrain==1.0.3
-lightning==2.3.3
+# Speech Recognition - Lightweight options
+openai-whisper==20231117
+faster-whisper==0.10.0
 
-# System & File Handling
+# System utilities
 python-magic==0.4.27
-redis==3.5.3
-
-# Production server
-gunicorn==21.2.0
-
-# System monitoring
+redis==5.0.1
 psutil==5.9.8
 
-# Memory optimization
-gc-python==1.0.0
-
-# Async processing
-celery==5.3.4  # If using background tasks
-redis==5.0.1   # For task queue
+# Optional heavy ML packages (commented out for Railway)
+# whisperx==3.1.1
+# pyannote.audio==3.1.1
+# transformers==4.52.3
+# noisereduce==3.0.3
+# speechbrain==1.0.3
+# lightning==2.3.3

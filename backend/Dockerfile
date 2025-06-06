@@ -1,46 +1,40 @@
-# Multi-stage build for Railway deployment
+# Railway-optimized Dockerfile
 FROM python:3.10-slim as builder
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PIP_NO_CACHE_DIR=1
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV PIP_TIMEOUT=1000
-ENV PIP_RETRIES=10
+# Set build arguments for Railway optimization
+ARG DEBIAN_FRONTEND=noninteractive
 
-# Create app user early
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-
-# Install system dependencies for ML libraries
+# Install essential build dependencies with memory optimization
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ffmpeg \
     libsndfile1-dev \
     libffi-dev \
-    libssl-dev \
     curl \
     git \
+    pkg-config \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-RUN echo $(ls -1 .)
-# Copy requirements and install Python dependencies
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy requirements from the correct path (Railway builds from root)
+COPY backend/requirements.txt .
 
-# Production stage
+# Install Python dependencies with Railway optimizations
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir --no-compile -r requirements.txt
+
+# Production stage - minimal and optimized
 FROM python:3.10-slim
 
-# Install runtime dependencies
+# Install minimal runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
     curl \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
 
 WORKDIR /app
 
@@ -48,25 +42,32 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy application code
-COPY . /app/
+# Copy application code from backend directory
+COPY backend/ .
 
-# Create necessary directories and set permissions
-RUN mkdir -p /app/storage /app/logs /app/tmp && \
+# Create app user and directories
+RUN groupadd -r appuser && useradd -r -g appuser appuser && \
+    mkdir -p /app/storage /app/logs /app/tmp /app/models && \
     chown -R appuser:appuser /app
 
 USER appuser
 
-# Set environment variables
+# Railway-optimized environment variables
 ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONHASHSEED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    TOKENIZERS_PARALLELISM=false \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1
 
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=30s --retries=3 \
+# Simple health check for Railway
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=2 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Use Railway's PORT environment variable if available, otherwise default to 8000
-CMD ["sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Railway startup command with PORT variable support
+CMD ["sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]

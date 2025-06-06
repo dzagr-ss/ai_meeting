@@ -59,7 +59,8 @@ import openai
 from openai import OpenAI
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
-import whisperx
+
+# Essential imports that should always work
 import torch
 import torchaudio
 from pydub import AudioSegment
@@ -67,9 +68,29 @@ import numpy as np
 import librosa
 import soundfile as sf
 from scipy.signal import butter, filtfilt
-import noisereduce as nr
-from pyannote.audio import Pipeline
-from pyannote.core import Segment
+
+# Optional imports with fallbacks for Railway deployment
+try:
+    import whisperx
+    WHISPERX_AVAILABLE = True
+except ImportError:
+    print("⚠️  WhisperX not available - using fallback transcription")
+    WHISPERX_AVAILABLE = False
+
+try:
+    import noisereduce as nr
+    NOISEREDUCE_AVAILABLE = True
+except ImportError:
+    print("⚠️  Noisereduce not available - audio will not be denoised")
+    NOISEREDUCE_AVAILABLE = False
+
+try:
+    from pyannote.audio import Pipeline
+    from pyannote.core import Segment
+    PYANNOTE_AVAILABLE = True
+except ImportError:
+    print("⚠️  PyAnnote.audio not available - using fallback speaker identification")
+    PYANNOTE_AVAILABLE = False
 
 # Import local modules
 from database import get_db, engine, SessionLocal

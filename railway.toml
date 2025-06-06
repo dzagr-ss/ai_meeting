@@ -1,10 +1,12 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "backend/Dockerfile"
+# Set build context to backend directory
+buildCommand = "echo 'Building from backend directory'"
 
 [deploy]
 healthcheckPath = "/health"
-healthcheckTimeout = 100
+healthcheckTimeout = 60
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
@@ -14,6 +16,10 @@ PYTHONDONTWRITEBYTECODE = "1"
 STORAGE_PATH = "/app/storage"
 USE_CPU_ONLY = "true"
 WHISPERX_DEVICE = "cpu"
-WHISPERX_BATCH_SIZE = "4"
+WHISPERX_BATCH_SIZE = "2"
 WHISPERX_COMPUTE_TYPE = "float32"
 WHISPERX_MODEL_SIZE = "base"
+# Railway optimizations
+TOKENIZERS_PARALLELISM = "false"
+TRANSFORMERS_CACHE = "/app/models"
+HF_HOME = "/app/models"
