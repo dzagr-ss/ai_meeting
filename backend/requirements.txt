@@ -33,10 +33,6 @@ librosa==0.10.1
 scipy==1.14.1
 pydub==0.25.1
 
-# Speech Recognition - Lightweight options
-openai-whisper==20231117
-faster-whisper==0.10.0
-
 # System utilities
 python-magic==0.4.27
 redis==5.0.1
