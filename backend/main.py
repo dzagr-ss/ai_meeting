@@ -217,6 +217,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Record app start time for health check uptime calculation
+app_start_time = time.time()
+
 # Rate limiter setup with Redis backend for production
 limiter = Limiter(
     key_func=get_remote_address,
@@ -2825,7 +2828,7 @@ async def health_check():
             "status": status,
             "memory_usage_percent": memory_usage_percent,
             "disk_usage_percent": disk_usage_percent,
-            "uptime": time.time() - app_start_time
+            "uptime": getattr(globals(), "app_start_time", 0) and (time.time() - app_start_time) or 0
         }
     except Exception as e:
         return {"status": "unhealthy", "error": str(e)}
