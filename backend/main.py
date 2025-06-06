@@ -242,27 +242,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Raw health check that bypasses all FastAPI middleware
-async def raw_health_check(scope, receive, send):
-    """Raw ASGI health check that bypasses all middleware"""
-    if scope["type"] == "http" and scope["path"] == "/health":
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [
-                [b"content-type", b"text/plain"],
-                [b"content-length", b"2"],
-            ],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": b"OK",
-        })
-        return
-    
-    # If not health check, pass to FastAPI
-    await app(scope, receive, send)
-
 # Record app start time for health check uptime calculation
 app_start_time = time.time()
 
@@ -272,6 +251,10 @@ limiter = Limiter(
     default_limits=["1000/day", "100/hour"]  # Global default limits
 )
 app.state.limiter = limiter
+
+# Add SlowAPI middleware - this was missing!
+app.add_middleware(SlowAPIMiddleware)
+
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Custom rate limit handler with better error messages
@@ -286,6 +269,23 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         }
     )
     response.headers["Retry-After"] = str(getattr(exc, 'retry_after', 60))
+    return response
+
+# Middleware to exempt health endpoints from rate limiting
+@app.middleware("http")
+async def exempt_health_from_rate_limiting(request: Request, call_next):
+    # Bypass all processing for health check endpoints - return immediately
+    if request.url.path in ["/health", "/healthz", "/ready"]:
+        # For health endpoints, create a direct response to avoid any middleware
+        if request.url.path == "/health":
+            return JSONResponse({"status": "ok"})
+        elif request.url.path == "/healthz":
+            return JSONResponse({"status": "ok", "timestamp": time.time()})
+        elif request.url.path == "/ready":
+            return JSONResponse({"status": "ready", "service": "stocks-agent-api"})
+    
+    # For all other endpoints, continue with normal processing
+    response = await call_next(request)
     return response
 
 # Security headers middleware
@@ -334,88 +334,46 @@ def get_allowed_origins():
     try:
         # Use settings object instead of direct environment access
         origins_str = settings.BACKEND_CORS_ORIGINS
-        print(f"[CORS DEBUG] Raw origins string from settings: '{origins_str}'")
-        print(f"[CORS DEBUG] Raw string repr: {repr(origins_str)}")
-        print(f"[CORS DEBUG] Raw string bytes: {origins_str.encode('utf-8')}")
+        print(f"[CORS] Raw origins string: {origins_str}")
         
         if origins_str:
             # Parse comma-separated origins (handle semicolons too)
             origins = []
             # Replace semicolons with commas and split, then clean up each origin
             normalized_str = origins_str.replace(';', ',').replace('\n', ',')
-            print(f"[CORS DEBUG] Normalized string: '{normalized_str}'")
-            print(f"[CORS DEBUG] Normalized string repr: {repr(normalized_str)}")
             
-            for i, origin in enumerate(normalized_str.split(",")):
-                print(f"[CORS DEBUG] Processing origin {i}: '{origin}'")
-                print(f"[CORS DEBUG] Origin {i} repr: {repr(origin)}")
-                print(f"[CORS DEBUG] Origin {i} bytes: {origin.encode('utf-8')}")
+            for origin in normalized_str.split(","):
+                # Clean up the origin
+                origin = origin.strip().strip("'\"").rstrip(';,').strip()
                 
-                # Much more aggressive cleaning - remove all possible problematic characters
-                origin = origin.strip()  # Remove whitespace
-                origin = origin.strip("'").strip('"')  # Remove quotes
-                origin = origin.rstrip(';').rstrip(',')  # Remove trailing semicolons and commas
-                origin = origin.strip()  # Remove whitespace again
-                
-                # Additional aggressive cleaning - remove any non-ASCII or control characters from the end
-                while origin and (ord(origin[-1]) < 32 or ord(origin[-1]) > 126):
-                    print(f"[CORS DEBUG] Removing non-ASCII/control char: {repr(origin[-1])} (ord: {ord(origin[-1])})")
-                    origin = origin[:-1]
-                
-                # Remove specific problematic characters that might be in the string
-                origin = origin.replace('\x00', '').replace('\r', '').replace('\n', '').replace('\t', '')
-                
-                # EXTREME FIX: Recreate the string character by character, only keeping valid URL characters
-                cleaned_chars = []
-                for char in origin:
-                    # Only keep characters that are valid in URLs
-                    if char.isalnum() or char in '.-:/_':
-                        cleaned_chars.append(char)
-                    else:
-                        print(f"[CORS DEBUG] Removing invalid char: {repr(char)} (ord: {ord(char)})")
-                
-                origin = ''.join(cleaned_chars)
-                
-                print(f"[CORS DEBUG] Final cleaned origin {i}: '{origin}'")
-                print(f"[CORS DEBUG] Final cleaned origin {i} repr: {repr(origin)}")
+                # Remove any non-printable characters
+                origin = ''.join(char for char in origin if char.isprintable())
                 
                 if origin and (origin.startswith(("http://", "https://")) or origin == "*"):
-                    # Create a completely new string to avoid any reference issues
-                    clean_origin = str(origin)
-                    origins.append(clean_origin)
-                    print(f"[CORS DEBUG] Added to list: {repr(clean_origin)}")
+                    origins.append(origin)
+                    print(f"[CORS] Added origin: {origin}")
             
-            print(f"[CORS DEBUG] All cleaned origins list: {origins}")
-            print(f"[CORS DEBUG] All cleaned origins repr: {repr(origins)}")
-            
-            # Additional safety check - recreate the entire list
-            final_origins = []
-            for origin in origins:
-                final_origins.append(str(origin))
-            
-            print(f"[CORS DEBUG] Final origins list: {final_origins}")
-            print(f"[CORS DEBUG] Final origins repr: {repr(final_origins)}")
-            
-            if final_origins:
-                return final_origins
+            if origins:
+                print(f"[CORS] Final origins: {origins}")
+                return origins
         
         # Default development origins if nothing valid found
         default_origins = [
             "http://localhost:3000",
             "http://127.0.0.1:3000",
         ]
-        print(f"[CORS DEBUG] Using default origins: {default_origins}")
+        print(f"[CORS] Using default origins: {default_origins}")
         return default_origins
         
     except Exception as e:
         app_logger.error(f"Error parsing CORS origins: {e}")
-        print(f"[CORS DEBUG] Exception occurred: {e}")
+        print(f"[CORS] Exception occurred: {e}")
         # Return safe defaults
         default_origins = [
             "http://localhost:3000",
             "http://127.0.0.1:3000",
         ]
-        print(f"[CORS DEBUG] Using fallback default origins: {default_origins}")
+        print(f"[CORS] Using fallback default origins: {default_origins}")
         return default_origins
 
 allowed_origins = get_allowed_origins()
@@ -2940,67 +2898,17 @@ async def group_meeting_transcriptions(
 @app.get("/health")
 async def health_check():
     """Ultra-simple health check for Railway - bypasses all middleware"""
-    from fastapi.responses import PlainTextResponse
-    return PlainTextResponse("OK", status_code=200)
+    return {"status": "ok"}
 
 @app.get("/healthz")
 async def health_check_detailed():
     """Detailed health check for Railway (alternative endpoint)"""
-    try:
-        # Check database connectivity with timeout
-        try:
-            db = SessionLocal()
-            db.execute("SELECT 1")
-            db.close()
-            db_status = "healthy"
-        except Exception as db_error:
-            print(f"Health check DB error: {db_error}")
-            db_status = "unhealthy"
-        
-        # Check memory usage safely
-        try:
-            memory = psutil.virtual_memory()
-            memory_usage_percent = memory.percent
-        except Exception as mem_error:
-            print(f"Health check memory error: {mem_error}")
-            memory_usage_percent = 0
-        
-        # Check disk space with multiple fallbacks
-        disk_usage_percent = 0
-        try:
-            disk = psutil.disk_usage('/tmp')
-            disk_usage_percent = (disk.used / disk.total) * 100
-        except Exception:
-            try:
-                disk = psutil.disk_usage('.')
-                disk_usage_percent = (disk.used / disk.total) * 100
-            except Exception:
-                try:
-                    disk = psutil.disk_usage('/')
-                    disk_usage_percent = (disk.used / disk.total) * 100
-                except Exception as disk_error:
-                    print(f"Health check disk error: {disk_error}")
-                    disk_usage_percent = 0
-        
-        status = "healthy"
-        if memory_usage_percent > 95:
-            status = "warning_high_memory"
-        if disk_usage_percent > 95:
-            status = "warning_high_disk"
-            
-        return {
-            "status": status,
-            "database": db_status,
-            "memory_usage_percent": memory_usage_percent,
-            "disk_usage_percent": disk_usage_percent,
-            "uptime": getattr(globals(), "app_start_time", 0) and (time.time() - app_start_time) or 0,
-            "timestamp": time.time()
-        }
-    except Exception as e:
-        # Always return healthy to prevent health check failures
-        print(f"Health check error (non-critical): {e}")
-        from fastapi.responses import PlainTextResponse
-        return PlainTextResponse("OK", status_code=200)
+    return {"status": "ok", "timestamp": time.time()}
+
+@app.get("/ready")
+async def readiness_check():
+    """Readiness check for Railway - alternative health endpoint"""
+    return {"status": "ready", "service": "stocks-agent-api"}
 
 @app.get("/metrics")
 async def get_metrics():
@@ -3649,7 +3557,7 @@ if __name__ == "__main__":
     
     # Configure uvicorn with security settings
     uvicorn_config = {
-        "app": "main:raw_health_check",  # Use raw health check instead of app
+        "app": "main:app",  # Use main FastAPI app
         "host": "0.0.0.0",
         "port": int(os.getenv("PORT", 8000)),
         "reload": os.getenv("ENVIRONMENT", "development") == "development",
@@ -3681,5 +3589,5 @@ if __name__ == "__main__":
     
     uvicorn.run(**uvicorn_config) 
 
-# Export the raw health check for Railway deployment
-app_instance = raw_health_check
+# Export the main app for Railway deployment
+app_instance = app
