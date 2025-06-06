@@ -38,7 +38,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, F
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, PlainTextResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -314,6 +314,8 @@ def get_allowed_origins():
         # Use settings object instead of direct environment access
         origins_str = settings.BACKEND_CORS_ORIGINS
         print(f"[CORS DEBUG] Raw origins string from settings: '{origins_str}'")
+        print(f"[CORS DEBUG] Raw string repr: {repr(origins_str)}")
+        print(f"[CORS DEBUG] Raw string bytes: {origins_str.encode('utf-8')}")
         
         if origins_str:
             # Parse comma-separated origins (handle semicolons too)
@@ -321,12 +323,30 @@ def get_allowed_origins():
             # Replace semicolons with commas and split, then clean up each origin
             normalized_str = origins_str.replace(';', ',').replace('\n', ',')
             print(f"[CORS DEBUG] Normalized string: '{normalized_str}'")
+            print(f"[CORS DEBUG] Normalized string repr: {repr(normalized_str)}")
             
             for i, origin in enumerate(normalized_str.split(",")):
                 print(f"[CORS DEBUG] Processing origin {i}: '{origin}'")
-                # More thorough cleaning - remove quotes, semicolons, and whitespace
-                origin = origin.strip().strip("'").strip('"').strip(';').strip()
+                print(f"[CORS DEBUG] Origin {i} repr: {repr(origin)}")
+                print(f"[CORS DEBUG] Origin {i} bytes: {origin.encode('utf-8')}")
+                
+                # Much more aggressive cleaning - remove all possible problematic characters
+                origin = origin.strip()  # Remove whitespace
+                origin = origin.strip("'").strip('"')  # Remove quotes
+                origin = origin.rstrip(';').rstrip(',')  # Remove trailing semicolons and commas
+                origin = origin.strip()  # Remove whitespace again
+                
+                # Additional aggressive cleaning - remove any non-ASCII or control characters from the end
+                while origin and (ord(origin[-1]) < 32 or ord(origin[-1]) > 126):
+                    print(f"[CORS DEBUG] Removing non-ASCII/control char: {repr(origin[-1])} (ord: {ord(origin[-1])})")
+                    origin = origin[:-1]
+                
+                # Remove specific problematic characters that might be in the string
+                origin = origin.replace('\x00', '').replace('\r', '').replace('\n', '').replace('\t', '')
+                
                 print(f"[CORS DEBUG] Cleaned origin {i}: '{origin}'")
+                print(f"[CORS DEBUG] Cleaned origin {i} repr: {repr(origin)}")
+                
                 if origin:
                     origins.append(origin)
             
@@ -2887,8 +2907,9 @@ async def group_meeting_transcriptions(
 
 @app.get("/health")
 async def health_check():
-    """Simplified health check for Railway"""
-    return {"status": "healthy", "timestamp": time.time()}
+    """Ultra-simple health check for Railway - bypasses all middleware"""
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("OK", status_code=200)
 
 @app.get("/healthz")
 async def health_check_detailed():
@@ -2946,11 +2967,8 @@ async def health_check_detailed():
     except Exception as e:
         # Always return healthy to prevent health check failures
         print(f"Health check error (non-critical): {e}")
-        return {
-            "status": "healthy", 
-            "error": str(e),
-            "timestamp": time.time()
-        }
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("OK", status_code=200)
 
 @app.get("/metrics")
 async def get_metrics():
