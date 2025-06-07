@@ -1217,6 +1217,8 @@ async def transcribe_meeting(
         try:
             audio_filename = await save_uploaded_file_securely(audio, user_meeting_dir)
             print(f"[Transcribe] Audio file securely saved to: {audio_filename}")
+            print(f"[Transcribe] File size: {os.path.getsize(audio_filename) if os.path.exists(audio_filename) else 'unknown'} bytes")
+            print(f"[Transcribe] Directory contents: {os.listdir(user_meeting_dir) if os.path.exists(user_meeting_dir) else 'directory not found'}")
         except HTTPException:
             # Re-raise validation errors
             raise
@@ -1368,12 +1370,78 @@ async def refine_speaker_diarization(
         print(f"[SpeakerRefinement] Getting audio files for meeting {meeting_id}")
         audio_files = get_meeting_audio_files(meeting_id, current_user.email)
         if not audio_files:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No audio files found for this meeting"
-            )
-        
-        print(f"[SpeakerRefinement] Found {len(audio_files)} audio files")
+            # Enhanced debugging for missing audio files
+            safe_email = get_safe_email_for_path(current_user.email)
+            user_meeting_dir = f"/tmp/meetings/{safe_email}/{meeting_id}"
+            print(f"[SpeakerRefinement] No audio files found in: {user_meeting_dir}")
+            
+            # Check if directory exists
+            if os.path.exists(user_meeting_dir):
+                files_in_dir = os.listdir(user_meeting_dir)
+                print(f"[SpeakerRefinement] Directory exists but contains: {files_in_dir}")
+            else:
+                print(f"[SpeakerRefinement] Directory doesn't exist")
+            
+            # Check for transcriptions without audio files (fallback mode)
+            transcriptions = db.query(models.Transcription).filter(
+                models.Transcription.meeting_id == meeting_id
+            ).order_by(models.Transcription.timestamp).all()
+            
+            if transcriptions:
+                print(f"[SpeakerRefinement] Found {len(transcriptions)} transcriptions without audio files - using fallback mode")
+                
+                # Simple speaker consistency fix without audio
+                updated_count = 0
+                speaker_mapping = {}
+                next_speaker_id = 1
+                
+                for transcription in transcriptions:
+                    current_speaker = transcription.speaker or "Unknown"
+                    
+                    if current_speaker not in speaker_mapping:
+                        if current_speaker == "Unknown" or current_speaker.startswith("SPEAKER_"):
+                            speaker_mapping[current_speaker] = f"Speaker_{next_speaker_id}"
+                            next_speaker_id += 1
+                        else:
+                            speaker_mapping[current_speaker] = current_speaker
+                    
+                    new_speaker = speaker_mapping[current_speaker]
+                    
+                    if transcription.speaker != new_speaker:
+                        transcription.speaker = new_speaker
+                        updated_count += 1
+                
+                if updated_count > 0:
+                    db.commit()
+                
+                return {
+                    "message": "Speaker refinement completed in fallback mode (no audio files found)",
+                    "audio_files_processed": 0,
+                    "transcriptions_updated": updated_count,
+                    "refined_segments": len(transcriptions),
+                    "speaker_mapping": speaker_mapping,
+                    "mode": "fallback_without_audio",
+                    "debug_info": {
+                        "expected_directory": user_meeting_dir,
+                        "directory_exists": os.path.exists(user_meeting_dir),
+                        "files_in_directory": os.listdir(user_meeting_dir) if os.path.exists(user_meeting_dir) else []
+                    }
+                }
+            else:
+                print(f"[SpeakerRefinement] No transcriptions and no audio files found")
+                return {
+                    "message": "No audio files or transcriptions found for this meeting",
+                    "audio_files_processed": 0,
+                    "transcriptions_updated": 0,
+                    "refined_segments": 0,
+                    "mode": "no_data_found",
+                    "debug_info": {
+                        "expected_directory": user_meeting_dir,
+                        "directory_exists": os.path.exists(user_meeting_dir),
+                        "files_in_directory": os.listdir(user_meeting_dir) if os.path.exists(user_meeting_dir) else [],
+                        "suggestion": "Please ensure audio is being recorded and uploaded during the meeting"
+                    }
+                }
         
         # For now, skip the comprehensive speaker analysis if it's taking too long
         # Instead, use a simplified approach that just assigns consistent speaker IDs
@@ -1996,12 +2064,59 @@ async def get_meeting_summary(
     # If no stored summary, generate a new one
     audio_files = get_meeting_audio_files(meeting_id, current_user.email)
     if not audio_files:
-        return JSONResponse({
-            "summary": None, 
-            "meeting_notes": None,
-            "action_items": None,
-            "error": "No audio files found for this meeting"
-        }, status_code=404)
+        # Enhanced debugging for missing audio files
+        safe_email = get_safe_email_for_path(current_user.email)
+        user_meeting_dir = f"/tmp/meetings/{safe_email}/{meeting_id}"
+        print(f"[Summary] No audio files found in: {user_meeting_dir}")
+        
+        # Check if directory exists
+        if os.path.exists(user_meeting_dir):
+            files_in_dir = os.listdir(user_meeting_dir)
+            print(f"[Summary] Directory exists but contains: {files_in_dir}")
+        else:
+            print(f"[Summary] Directory doesn't exist")
+        
+        # Check for existing transcriptions (fallback mode)
+        transcriptions = db.query(models.Transcription).filter(
+            models.Transcription.meeting_id == meeting_id
+        ).order_by(models.Transcription.timestamp).all()
+        
+        if transcriptions:
+            print(f"[Summary] Found {len(transcriptions)} transcriptions without audio files - using fallback mode")
+            
+            # Generate summary from transcriptions only
+            all_transcription_text = "\n".join([
+                f"{t.speaker}: {t.text}" for t in transcriptions
+            ])
+            
+            fallback_summary = {
+                "summary": f"Meeting summary generated from {len(transcriptions)} transcription segments. Audio files were not available for enhanced processing.",
+                "meeting_notes": all_transcription_text[:2000] + "..." if len(all_transcription_text) > 2000 else all_transcription_text,
+                "action_items": "Action items could not be generated without audio files.",
+                "debug_info": {
+                    "mode": "fallback_from_transcriptions",
+                    "transcription_count": len(transcriptions),
+                    "expected_directory": user_meeting_dir,
+                    "directory_exists": os.path.exists(user_meeting_dir),
+                    "files_in_directory": os.listdir(user_meeting_dir) if os.path.exists(user_meeting_dir) else []
+                }
+            }
+            
+            return fallback_summary
+        else:
+            print(f"[Summary] No transcriptions and no audio files found")
+            return JSONResponse({
+                "summary": None, 
+                "meeting_notes": None,
+                "action_items": None,
+                "error": "No audio files or transcriptions found for this meeting",
+                "debug_info": {
+                    "expected_directory": user_meeting_dir,
+                    "directory_exists": os.path.exists(user_meeting_dir),
+                    "files_in_directory": os.listdir(user_meeting_dir) if os.path.exists(user_meeting_dir) else [],
+                    "suggestion": "Please ensure audio is being recorded and uploaded during the meeting"
+                }
+            }, status_code=404)
     try:
         # First, process any uploaded audio files that haven't been transcribed yet
         await process_uploaded_audio_files(meeting_id, audio_files, db)
@@ -3621,6 +3736,115 @@ def cleanup_meeting_audio_files(meeting_id: int, user_email: str) -> dict:
             "directories_cleaned": 0,
             "error": str(e)
         }
+
+@app.get("/meetings/{meeting_id}/debug-audio")
+@limiter.limit("30/minute")  # Debug endpoint
+def debug_meeting_audio(
+    request: Request,
+    meeting_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Debug endpoint to check audio file status for a meeting
+    """
+    try:
+        # Verify meeting exists
+        meeting = db.query(models.Meeting).filter(
+            models.Meeting.id == meeting_id,
+            models.Meeting.owner_id == current_user.id
+        ).first()
+        
+        if not meeting:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Meeting not found"
+            )
+        
+        safe_email = get_safe_email_for_path(current_user.email)
+        user_meeting_dir = f"/tmp/meetings/{safe_email}/{meeting_id}"
+        
+        # Check directory structure
+        debug_info = {
+            "meeting_id": meeting_id,
+            "user_email": current_user.email,
+            "safe_email": safe_email,
+            "expected_directory": user_meeting_dir,
+            "directory_exists": os.path.exists(user_meeting_dir),
+            "parent_directory_exists": os.path.exists(os.path.dirname(user_meeting_dir)),
+            "files_in_directory": [],
+            "audio_files_found": [],
+            "transcriptions_count": 0,
+            "meeting_status": meeting.status if hasattr(meeting, 'status') else "unknown"
+        }
+        
+        # Check files in directory
+        if os.path.exists(user_meeting_dir):
+            try:
+                all_files = os.listdir(user_meeting_dir)
+                debug_info["files_in_directory"] = all_files
+                
+                # Filter audio files
+                audio_extensions = ['.wav', '.webm', '.mp3', '.m4a', '.flac', '.ogg', '.aac']
+                audio_files = [f for f in all_files if any(f.lower().endswith(ext) for ext in audio_extensions)]
+                debug_info["audio_files_found"] = audio_files
+                
+                # Get file details
+                file_details = []
+                for file in audio_files:
+                    file_path = os.path.join(user_meeting_dir, file)
+                    try:
+                        stat = os.stat(file_path)
+                        file_details.append({
+                            "name": file,
+                            "size": stat.st_size,
+                            "modified": stat.st_mtime,
+                            "is_readable": os.access(file_path, os.R_OK)
+                        })
+                    except Exception as e:
+                        file_details.append({
+                            "name": file,
+                            "error": str(e)
+                        })
+                
+                debug_info["file_details"] = file_details
+                
+            except Exception as e:
+                debug_info["directory_error"] = str(e)
+        
+        # Check transcriptions
+        transcriptions = db.query(models.Transcription).filter(
+            models.Transcription.meeting_id == meeting_id
+        ).all()
+        
+        debug_info["transcriptions_count"] = len(transcriptions)
+        if transcriptions:
+            debug_info["transcription_speakers"] = list(set([t.speaker for t in transcriptions if t.speaker]))
+            debug_info["transcription_sample"] = [
+                {"speaker": t.speaker, "text": t.text[:100] + "..." if len(t.text) > 100 else t.text}
+                for t in transcriptions[:3]
+            ]
+        
+        # Try to get audio files using the existing function
+        try:
+            audio_files_from_function = get_meeting_audio_files(meeting_id, current_user.email)
+            debug_info["get_meeting_audio_files_result"] = {
+                "count": len(audio_files_from_function),
+                "files": [os.path.basename(f) for f in audio_files_from_function]
+            }
+        except Exception as e:
+            debug_info["get_meeting_audio_files_error"] = str(e)
+        
+        return debug_info
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Debug] Error in debug_meeting_audio: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Debug error: {str(e)}"
+        )
 
 if __name__ == "__main__":
     # Load environment variables from .env file

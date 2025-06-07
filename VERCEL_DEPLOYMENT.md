@@ -5,8 +5,6 @@ The following errors have been resolved:
 
 1. **✅ Import Error**: `'API_URL' is not exported from '../utils/api'`
 2. **✅ CSP Error**: `Refused to connect to 'https://aimeeting.up.railway.app/token' because it violates the following Content Security Policy directive`
-3. **✅ Live Transcription**: Live transcription updates not showing in real-time
-4. **✅ Audio Recording**: "No audio files found for this meeting" error when stopping recording
 
 ### 1. API_URL Export Fix
 **Added API_URL export** in `frontend/src/utils/api.ts`:
@@ -21,34 +19,7 @@ export const API_URL = getApiUrl();
 connect-src 'self' ws: wss: http://localhost:8000 https://api.openai.com https://aimeeting.up.railway.app *.railway.app;
 ```
 
-### 3. Live Transcription Fix
-**Fixed WebSocket URL** in `frontend/src/components/AudioRecorder.tsx` to use dynamic API_URL:
-```typescript
-// Use the API_URL and convert HTTP(S) to WS(S)
-const wsBaseUrl = API_URL.replace('https://', '').replace('http://', '');
-const wsUrl = `${protocol}//${wsBaseUrl}/ws/meetings/${meetingId}/stream`;
-```
-
-**Added polling fallback** in `frontend/src/pages/MeetingRoom.tsx` for when WebSocket fails:
-- Polls for new transcriptions every 5 seconds during active meetings
-- Automatically detects new transcriptions and updates the UI
-- Stops polling when meetings are ended
-
-### 4. Audio Recording & Upload Fix
-**Fixed audio chunk collection** in `frontend/src/components/AudioRecorder.tsx`:
-- Improved MediaRecorder data collection with better debugging
-- Fixed stopRecording function to properly upload audio chunks
-- Added validation before ending meetings to ensure audio exists
-- Enhanced error handling and user feedback
-
-**Key improvements:**
-- Better audio chunk debugging and collection
-- Immediate upload on stop recording (no timeout delays)
-- Validation checks before speaker refinement and summarization
-- Automatic upload of live recording when ending meetings
-- Clear error messages when no audio is available
-
-### 5. Vercel Configuration
+### 3. Vercel Configuration
 **Created Vercel configuration** in `frontend/vercel.json`
 
 ## Vercel Environment Variables Setup
