@@ -56,8 +56,6 @@ import redis
 from pydantic import BaseModel, EmailStr, validator
 import openai
 from openai import OpenAI
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # Essential imports that should always work
 import torch
@@ -90,6 +88,19 @@ try:
 except ImportError:
     print("⚠️  PyAnnote.audio not available - using fallback speaker identification")
     PYANNOTE_AVAILABLE = False
+
+# Optional Google GenerativeAI import
+try:
+    import google.generativeai as genai
+    from google.generativeai.types import HarmCategory, HarmBlockThreshold
+    GEMINI_AVAILABLE = True
+    print("✅  Google GenerativeAI loaded successfully")
+except ImportError:
+    print("⚠️  Google GenerativeAI not available - using OpenAI only")
+    genai = None
+    HarmCategory = None
+    HarmBlockThreshold = None
+    GEMINI_AVAILABLE = False
 
 # Import local modules
 from database import get_db, engine, SessionLocal
