@@ -1,11 +1,33 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
+interface User {
+  email: string;
+  exp?: number;
+}
+
 interface AuthState {
   token: string | null;
+  user: User | null;
   isAuthenticated: boolean;
   loading: boolean;
   error: string | null;
 }
+
+// Utility function to decode user info from JWT token
+const decodeUserFromToken = (token: string | null): User | null => {
+  if (!token) return null;
+  
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return {
+      email: payload.sub,
+      exp: payload.exp
+    };
+  } catch (error) {
+    console.error('Error decoding user from token:', error);
+    return null;
+  }
+};
 
 // Utility function to check if token is expired
 const isTokenExpired = (token: string | null): boolean => {
@@ -26,9 +48,11 @@ const isTokenExpired = (token: string | null): boolean => {
 // Check initial token validity
 const storedToken = localStorage.getItem('token');
 const isValidToken = !!(storedToken && !isTokenExpired(storedToken));
+const storedUser = isValidToken ? decodeUserFromToken(storedToken) : null;
 
 const initialState: AuthState = {
   token: isValidToken ? storedToken : null,
+  user: storedUser,
   isAuthenticated: isValidToken,
   loading: false,
   error: null,
@@ -51,6 +75,7 @@ const authSlice = createSlice({
       state.loading = false;
       state.isAuthenticated = true;
       state.token = action.payload;
+      state.user = decodeUserFromToken(action.payload);
       localStorage.setItem('token', action.payload);
     },
     loginFailure: (state, action: PayloadAction<string>) => {
@@ -59,12 +84,14 @@ const authSlice = createSlice({
     },
     logout: (state) => {
       state.token = null;
+      state.user = null;
       state.isAuthenticated = false;
       localStorage.removeItem('token');
     },
     validateToken: (state) => {
       if (state.token && isTokenExpired(state.token)) {
         state.token = null;
+        state.user = null;
         state.isAuthenticated = false;
         localStorage.removeItem('token');
       }

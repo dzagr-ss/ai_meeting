@@ -27,7 +27,7 @@ import { logout } from '../store/slices/authSlice';
 const Navbar: React.FC = () => {
   const navigate = useNavigate();
   const dispatch = useDispatch();
-  const { isAuthenticated } = useSelector((state: RootState) => state.auth);
+  const { isAuthenticated, user } = useSelector((state: RootState) => state.auth);
   const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
 
   const handleLogout = () => {
@@ -125,7 +125,7 @@ const Navbar: React.FC = () => {
                     fontWeight: 600,
                   }}
                 >
-                  {'U'}
+                  {user?.email?.[0]?.toUpperCase() || 'U'}
                 </Avatar>
               </IconButton>
               <Menu
@@ -148,7 +148,7 @@ const Navbar: React.FC = () => {
                     Signed in as
                   </Typography>
                   <Typography variant="body1" fontWeight={600} noWrap>
-                    User
+                    {user?.email || 'User'}
                   </Typography>
                 </Box>
                 <Divider />
