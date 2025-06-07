@@ -284,8 +284,17 @@ def get_latest_meeting_summary(db: Session, meeting_id: int):
 
 # Transcription operations
 async def process_audio(db: Session, meeting_id: int, audio_data: schemas.AudioData):
-    # Initialize OpenAI client
-    client = OpenAI(api_key=config.settings.OPENAI_API_KEY)
+    # Initialize OpenAI client with defensive approach
+    try:
+        client = OpenAI(
+            api_key=config.settings.OPENAI_API_KEY,
+            timeout=60.0,  # Explicit timeout
+            max_retries=2   # Explicit retry count
+        )
+    except TypeError:
+        # Fallback for older OpenAI library versions
+        client = OpenAI(api_key=config.settings.OPENAI_API_KEY)
+    
     temp_file_path = None
     
     try:
@@ -339,8 +348,16 @@ async def process_audio(db: Session, meeting_id: int, audio_data: schemas.AudioD
 
 async def generate_action_items(text: str) -> list:
     try:
-        # Initialize OpenAI client
-        client = OpenAI(api_key=config.settings.OPENAI_API_KEY)
+        # Initialize OpenAI client with defensive approach
+        try:
+            client = OpenAI(
+                api_key=config.settings.OPENAI_API_KEY,
+                timeout=60.0,  # Explicit timeout
+                max_retries=2   # Explicit retry count
+            )
+        except TypeError:
+            # Fallback for older OpenAI library versions
+            client = OpenAI(api_key=config.settings.OPENAI_API_KEY)
         
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",

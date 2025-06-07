@@ -2478,8 +2478,16 @@ async def generate_action_items_with_chatgpt(meeting_id: int, db: Session) -> st
         if not full_transcript.strip():
             return "No transcript content available for action items generation."
         
-        # Initialize OpenAI client
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        # Initialize OpenAI client with explicit parameters only
+        try:
+            client = OpenAI(
+                api_key=settings.OPENAI_API_KEY,
+                timeout=60.0,  # Explicit timeout
+                max_retries=2   # Explicit retry count
+            )
+        except TypeError:
+            # Fallback for older OpenAI library versions
+            client = OpenAI(api_key=settings.OPENAI_API_KEY)
         
         # Improved prompt for action items extraction
         prompt = """I will give you a meeting transcription. Please analyze it and prepare a comprehensive list of action items.
@@ -2559,8 +2567,16 @@ async def generate_summary_with_openai(meeting_id: int, db: Session) -> dict:
                 "action_items": ""
             }
         
-        # Initialize OpenAI client
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        # Initialize OpenAI client with explicit parameters only
+        try:
+            client = OpenAI(
+                api_key=settings.OPENAI_API_KEY,
+                timeout=60.0,  # Explicit timeout
+                max_retries=2   # Explicit retry count
+            )
+        except TypeError:
+            # Fallback for older OpenAI library versions
+            client = OpenAI(api_key=settings.OPENAI_API_KEY)
         
         # Generate summary
         summary_prompt = """I will give you a meeting transcription. Please analyze it and provide a concise summary of the main points and outcomes.
@@ -2885,8 +2901,16 @@ async def process_single_file_fallback(audio_file: str, meeting_id: int, db: Ses
                 print(f"[ProcessUpload] Added placeholder transcription for unprocessable file")
                 return
         
-        # Use OpenAI Whisper to transcribe the audio
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        # Use OpenAI Whisper to transcribe the audio with defensive client initialization
+        try:
+            client = OpenAI(
+                api_key=settings.OPENAI_API_KEY,
+                timeout=60.0,  # Explicit timeout
+                max_retries=2   # Explicit retry count
+            )
+        except TypeError:
+            # Fallback for older OpenAI library versions
+            client = OpenAI(api_key=settings.OPENAI_API_KEY)
         
         with open(audio_file, "rb") as f:
             transcript = client.audio.transcriptions.create(
@@ -3603,8 +3627,16 @@ async def generate_tags_with_chatgpt(meeting_id: int, db: Session) -> List[str]:
         if not context_text.strip():
             return []
         
-        # Initialize OpenAI client
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        # Initialize OpenAI client with explicit parameters only
+        try:
+            client = OpenAI(
+                api_key=settings.OPENAI_API_KEY,
+                timeout=60.0,  # Explicit timeout
+                max_retries=2   # Explicit retry count
+            )
+        except TypeError:
+            # Fallback for older OpenAI library versions
+            client = OpenAI(api_key=settings.OPENAI_API_KEY)
         
         # Prompt for tag generation
         prompt = """I will give you meeting content (transcriptions and summary). Please analyze it and generate 2-5 relevant tags that best categorize this meeting.
