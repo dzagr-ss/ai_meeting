@@ -1,15 +1,26 @@
 # Vercel Frontend Deployment Fix
 
-## Issue Fixed
-The error `'API_URL' is not exported from '../utils/api'` has been resolved by:
+## Issues Fixed
+The following errors have been resolved:
 
-1. **Added API_URL export** in `frontend/src/utils/api.ts`:
-   ```typescript
-   // Export the API URL as a constant for backward compatibility
-   export const API_URL = getApiUrl();
-   ```
+1. **✅ Import Error**: `'API_URL' is not exported from '../utils/api'`
+2. **✅ CSP Error**: `Refused to connect to 'https://aimeeting.up.railway.app/token' because it violates the following Content Security Policy directive`
 
-2. **Created Vercel configuration** in `frontend/vercel.json`
+### 1. API_URL Export Fix
+**Added API_URL export** in `frontend/src/utils/api.ts`:
+```typescript
+// Export the API URL as a constant for backward compatibility
+export const API_URL = getApiUrl();
+```
+
+### 2. Content Security Policy Fix  
+**Updated CSP** in `frontend/public/index.html` to allow Railway backend connections:
+```html
+connect-src 'self' ws: wss: http://localhost:8000 https://api.openai.com https://aimeeting.up.railway.app *.railway.app;
+```
+
+### 3. Vercel Configuration
+**Created Vercel configuration** in `frontend/vercel.json`
 
 ## Vercel Environment Variables Setup
 
