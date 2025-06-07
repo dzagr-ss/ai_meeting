@@ -22,6 +22,9 @@ const getApiUrl = (): string => {
   return 'https://aimeeting.up.railway.app';
 };
 
+// Export the API URL as a constant for backward compatibility
+export const API_URL = getApiUrl();
+
 // Export the API URL function for use in other components
 export { getApiUrl };
 
