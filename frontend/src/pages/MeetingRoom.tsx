@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { API_URL } from '../utils/api';
 import {
   Box,
@@ -172,6 +172,10 @@ const MeetingRoom: React.FC = () => {
   const [newMessagesCount, setNewMessagesCount] = useState(0);
   const [lastSeenLiveSegmentsCount, setLastSeenLiveSegmentsCount] = useState(0);
 
+  // Add polling state for live transcription updates
+  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
+  const [lastTranscriptionCount, setLastTranscriptionCount] = useState(0);
+
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setActiveTab(newValue);
   };
@@ -237,6 +241,8 @@ const MeetingRoom: React.FC = () => {
         if (response.ok) {
           const data = await response.json();
           setStoredTranscriptions(data);
+          setLastTranscriptionCount(data.length); // Initialize count for polling
+          console.log(`[LoadStoredTranscriptions] Loaded ${data.length} stored transcriptions`);
         } else {
           console.error('Failed to load transcriptions:', response.status);
         }
@@ -404,6 +410,53 @@ const MeetingRoom: React.FC = () => {
       setLastSeenLiveSegmentsCount(liveSegments.length);
     }
   };
+
+  // Polling function to check for new transcriptions during active meetings
+  const pollForTranscriptionUpdates = useCallback(async () => {
+    if (!id || !token || !meeting) return;
+    
+    // Only poll if meeting is active (not ended)
+    if (meeting.status === 'ended' || meeting.end_time) return;
+    
+    try {
+      const response = await fetchWithAuth(`${API_URL}/meetings/${id}/transcriptions`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        
+        // Check if there are new transcriptions
+        if (data.length !== lastTranscriptionCount) {
+          console.log(`[Polling] New transcriptions detected: ${data.length} (was ${lastTranscriptionCount})`);
+          setStoredTranscriptions(data);
+          setLastTranscriptionCount(data.length);
+          setRefreshKey(prev => prev + 1);
+        }
+      }
+    } catch (error) {
+      console.error('Error polling for transcription updates:', error);
+    }
+  }, [id, token, meeting, lastTranscriptionCount]);
+
+  // Set up polling when meeting is active
+  useEffect(() => {
+    if (meeting && meeting.status === 'active' && !meeting.end_time) {
+      console.log('[Polling] Starting transcription polling for active meeting');
+      const interval = setInterval(pollForTranscriptionUpdates, 5000); // Poll every 5 seconds
+      setPollingInterval(interval);
+      
+      return () => {
+        console.log('[Polling] Cleaning up transcription polling');
+        clearInterval(interval);
+        setPollingInterval(null);
+      };
+    } else {
+      console.log('[Polling] Meeting not active, stopping polling');
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+        setPollingInterval(null);
+      }
+    }
+  }, [meeting, pollForTranscriptionUpdates]);
 
   return (
     <Box sx={{ minHeight: '100vh', backgroundColor: 'background.default', py: 4 }}>

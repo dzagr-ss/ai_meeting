@@ -415,7 +415,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
         try {
             console.log('Connecting to WebSocket...');
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//aimeeting.up.railway.app/ws/meetings/${meetingId}/stream`;
+            // Use the API_URL and convert HTTP(S) to WS(S)
+            const wsBaseUrl = API_URL.replace('https://', '').replace('http://', '');
+            const wsUrl = `${protocol}//${wsBaseUrl}/ws/meetings/${meetingId}/stream`;
             console.log('WebSocket URL:', wsUrl);
             
             const ws = new WebSocket(wsUrl);
@@ -682,11 +684,18 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
             mediaRecorderRef.current.ondataavailable = (event) => {
                 if (event.data.size > 0) {
                     console.log('[AudioRecorder] MediaRecorder data available, size:', event.data.size);
-                    setAudioChunks((prev) => [...prev, event.data]);
+                    setAudioChunks((prev) => {
+                        const newChunks = [...prev, event.data];
+                        console.log('[AudioRecorder] Updated audioChunks, total chunks:', newChunks.length, 'total size:', newChunks.reduce((acc, chunk) => acc + chunk.size, 0));
+                        return newChunks;
+                    });
+                } else {
+                    console.log('[AudioRecorder] MediaRecorder data available but size is 0');
                 }
             };
             mediaRecorderRef.current.onstart = () => {
                 console.log('[AudioRecorder] MediaRecorder started successfully');
+                setAudioChunks([]); // Clear any previous chunks
             };
             mediaRecorderRef.current.onstop = () => {
                 console.log('[AudioRecorder] MediaRecorder stopped');
@@ -767,55 +776,68 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
             console.log('WebSocket closed');
         }
 
-        // Get the current audio chunks (use a timeout to ensure all data is collected)
-        setTimeout(async () => {
-            // Get current audioChunks state
-            setAudioChunks(currentChunks => {
-                console.log('[AudioRecorder] Current audio chunks length:', currentChunks.length);
+        // Get the current audio chunks and upload immediately
+        console.log('[AudioRecorder] Getting current audio chunks for upload...');
+        const currentChunks = audioChunks; // Get current state directly
+        console.log('[AudioRecorder] Current audio chunks length:', currentChunks.length);
+        
+        if (currentChunks.length > 0 && meetingId && typeof meetingId === 'number' && !isNaN(meetingId)) {
+            console.log('[AudioRecorder] Uploading audio chunks...');
+            const audioBlob = new Blob(currentChunks, { type: 'audio/webm' });
+            console.log('[AudioRecorder] Created audio blob, size:', audioBlob.size);
+            
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'recording.webm');
+            
+            try {
+                console.log('[AudioRecorder] Sending upload request...');
+                const uploadResponse = await fetchWithAuth(`${API_URL}/meetings/${meetingId}/transcribe`, {
+                    method: 'POST',
+                    body: formData,
+                });
                 
-                // Now upload audio to backend if available (after MediaRecorder has finished)
-                if (currentChunks.length > 0 && meetingId && typeof meetingId === 'number' && !isNaN(meetingId)) {
-                    const audioBlob = new Blob(currentChunks, { type: 'audio/webm' });
-                    const formData = new FormData();
-                    formData.append('audio', audioBlob, 'recording.webm');
+                console.log('[AudioRecorder] Upload response status:', uploadResponse.status);
+                
+                if (!uploadResponse.ok) {
+                    const errorText = await uploadResponse.text();
+                    console.error('[AudioRecorder] Audio upload failed:', errorText);
+                    setError('Failed to upload audio: ' + errorText);
+                } else {
+                    console.log('[AudioRecorder] Audio upload successful!');
+                    const responseData = await uploadResponse.json();
+                    console.log('[AudioRecorder] Upload response data:', responseData);
                     
-                    fetchWithAuth(`${API_URL}/meetings/${meetingId}/transcribe`, {
-                        method: 'POST',
-                        body: formData,
-                    })
-                    .then(async (uploadResponse) => {
-                        if (!uploadResponse.ok) {
-                            const errorText = await uploadResponse.text();
-                            console.error('[AudioRecorder] Audio upload failed:', errorText);
-                            setError('Failed to upload audio: ' + errorText);
-                        } else {
-                            console.log('[AudioRecorder] Audio upload successful');
-                            // Reload stored summaries to include the new one
-                            loadAllStoredData();
-                        }
-                    })
-                    .catch((err) => {
-                        setError('Failed to upload audio');
-                        console.error('[AudioRecorder] Audio upload error:', err);
-                    });
-
+                    // Reload stored data to include the new transcriptions
+                    loadAllStoredData();
+                    
                     // Create audio URL for download
                     const url = URL.createObjectURL(audioBlob);
                     setAudioUrl(url);
-                } else {
-                    console.log('[AudioRecorder] No audio chunks to upload or invalid meetingId. Chunks length:', currentChunks.length);
                 }
-                
-                return currentChunks; // Return the same chunks (no state change)
+            } catch (uploadError) {
+                console.error('[AudioRecorder] Audio upload error:', uploadError);
+                setError('Failed to upload audio: ' + (uploadError instanceof Error ? uploadError.message : 'Unknown error'));
+            }
+        } else {
+            console.log('[AudioRecorder] No audio chunks to upload or invalid meetingId.');
+            console.log('[AudioRecorder] Details:', {
+                chunksLength: currentChunks.length,
+                meetingId,
+                meetingIdType: typeof meetingId,
+                isValidMeetingId: !isNaN(meetingId)
             });
-        }, 500); // Wait 500ms for all data to be collected
+            
+            if (currentChunks.length === 0) {
+                setError('No audio was recorded. Please try recording again.');
+            }
+        }
         
         } catch (error) {
             console.error('Error stopping recording:', error);
             setError(error instanceof Error ? error.message : 'Failed to stop recording');
             setIsRecording(false); // Ensure recording state is reset even on error
         }
-    }, [meetingId, loadAllStoredData]);
+    }, [meetingId, loadAllStoredData, audioChunks]);
 
     const fetchSummary = async (meetingId: number) => {
         if (!token) {
@@ -1133,8 +1155,43 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
             if (transcriptionsResponse.ok) {
                 const transcriptionsData = await transcriptionsResponse.json();
                 if (!transcriptionsData || transcriptionsData.length === 0) {
-                    setError('No audio has been recorded or uploaded for this meeting yet. Please record audio or upload an audio file before ending the meeting.');
-                    return;
+                    // Also check if there are any audio chunks from live recording
+                    console.log('[AudioRecorder] Checking audio chunks for live recording...');
+                    console.log('[AudioRecorder] Current audioChunks length:', audioChunks.length);
+                    
+                    if (audioChunks.length === 0) {
+                        setError('No audio has been recorded or uploaded for this meeting yet. Please record audio or upload an audio file before ending the meeting.');
+                        return;
+                    } else {
+                        console.log('[AudioRecorder] Found audio chunks from live recording, will upload before proceeding');
+                        // If there are audio chunks but no transcriptions, upload the chunks first
+                        try {
+                            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                            console.log('[AudioRecorder] Created audio blob for upload, size:', audioBlob.size);
+                            
+                            const formData = new FormData();
+                            formData.append('audio', audioBlob, 'recording.webm');
+                            
+                            const uploadResponse = await fetchWithAuth(`${API_URL}/meetings/${meetingId}/transcribe`, {
+                                method: 'POST',
+                                body: formData,
+                            });
+                            
+                            if (!uploadResponse.ok) {
+                                const errorText = await uploadResponse.text();
+                                setError('Failed to upload recorded audio: ' + errorText);
+                                return;
+                            } else {
+                                console.log('[AudioRecorder] Successfully uploaded recorded audio before ending meeting');
+                                // Wait a moment for the backend to process
+                                await new Promise(resolve => setTimeout(resolve, 2000));
+                            }
+                        } catch (uploadError) {
+                            console.error('[AudioRecorder] Error uploading audio before ending meeting:', uploadError);
+                            setError('Failed to upload recorded audio before ending meeting');
+                            return;
+                        }
+                    }
                 }
                 console.log(`[AudioRecorder] Found ${transcriptionsData.length} transcriptions for meeting ${meetingId}`);
                 
