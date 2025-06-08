@@ -13,7 +13,11 @@ from dotenv import load_dotenv
 import secrets
 
 # Load .env file only if it exists (for local development)
-if os.path.exists('.env'):
+# First try to load from backend directory, then from current directory
+backend_env = os.path.join(os.path.dirname(__file__), '.env')
+if os.path.exists(backend_env):
+    load_dotenv(backend_env)
+elif os.path.exists('.env'):
     load_dotenv()
 
 class Settings(BaseSettings):
@@ -25,7 +29,10 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = Field(default="development", description="Environment: development, production")
     
     # Database - Required, no default
-    DATABASE_URL: str = Field(..., description="Database connection URL")
+    DATABASE_URL: str = Field(
+        default="sqlite:///./test.db", 
+        description="Database connection URL"
+    )
     
     # JWT - Generate secure default for production if not set
     SECRET_KEY: str = Field(
@@ -182,4 +189,9 @@ def generate_secret_key() -> str:
     """Generate a cryptographically secure secret key"""
     return secrets.token_urlsafe(32)
 
-settings = Settings() 
+settings = Settings()
+
+# Override DATABASE_URL for local development if it's pointing to PostgreSQL
+if settings.ENVIRONMENT == "development" and "postgresql://" in settings.DATABASE_URL:
+    settings.DATABASE_URL = "sqlite:///./test.db"
+    print(f"[Config] Overriding DATABASE_URL for local development: {settings.DATABASE_URL}") 

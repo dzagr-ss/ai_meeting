@@ -1,7 +1,15 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime, Text, Table
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime, Text, Table, Enum
+import enum
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
+
+class UserType(enum.Enum):
+    ADMIN = "admin"
+    PENDING = "pending"
+    TRIAL = "trial"
+    NORMAL = "normal"
+    PRO = "pro"
 
 # Association table for many-to-many relationship between meetings and tags
 meeting_tags = Table(
@@ -18,6 +26,7 @@ class User(Base):
     email = Column(String, unique=True, index=True)
     hashed_password = Column(String)
     is_active = Column(Boolean, default=True)
+    user_type = Column(Enum(UserType), default=UserType.PENDING)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     meetings = relationship("Meeting", back_populates="owner")

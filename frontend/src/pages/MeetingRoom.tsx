@@ -148,7 +148,6 @@ const MeetingRoom: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const token = useAppSelector(state => state.auth.token);
   const [meeting, setMeeting] = useState<Meeting | null>(null);
-  const [loadingMeeting, setLoadingMeeting] = useState(false);
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string>('');
@@ -180,7 +179,6 @@ const MeetingRoom: React.FC = () => {
   const loadMeetingData = async () => {
     if (!id || !token) return;
     
-    setLoadingMeeting(true);
     try {
       const response = await fetchWithAuth(`${API_URL}/meetings/`);
       
@@ -195,8 +193,6 @@ const MeetingRoom: React.FC = () => {
       }
     } catch (error) {
       console.error('Error loading meeting data:', error);
-    } finally {
-      setLoadingMeeting(false);
     }
   };
 
@@ -250,7 +246,7 @@ const MeetingRoom: React.FC = () => {
     getAudioDevices();
     loadStoredTranscriptions();
     loadMeetingData();
-  }, [id, token]);
+  }, [id, token, loadMeetingData]);
 
   // Monitor storedTranscriptions changes
   useEffect(() => {

@@ -14,19 +14,27 @@ db_logger.setLevel(logging.INFO)
 SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
 
 # Enhanced engine configuration with security features
-engine_config = {
-    "echo": False,
-    "pool_pre_ping": True,
-    "pool_recycle": 1800,  # Reduced from 3600 for Railway
-    "poolclass": QueuePool,
-    "pool_size": 3,        # Reduced from 10 for Railway
-    "max_overflow": 5,     # Reduced from 20 for Railway
-    "pool_timeout": 10,    # Reduced timeout for faster failover
-    "connect_args": {
-        "connect_timeout": 10,
-        "application_name": "meeting-transcription-app"
+if "sqlite" in SQLALCHEMY_DATABASE_URL:
+    # Simple configuration for SQLite (local development)
+    engine_config = {
+        "echo": False,
+        "connect_args": {"check_same_thread": False}
     }
-}
+else:
+    # Full configuration for PostgreSQL (production)
+    engine_config = {
+        "echo": False,
+        "pool_pre_ping": True,
+        "pool_recycle": 1800,  # Reduced from 3600 for Railway
+        "poolclass": QueuePool,
+        "pool_size": 3,        # Reduced from 10 for Railway
+        "max_overflow": 5,     # Reduced from 20 for Railway
+        "pool_timeout": 10,    # Reduced timeout for faster failover
+        "connect_args": {
+            "connect_timeout": 10,
+            "application_name": "meeting-transcription-app"
+        }
+    }
 
 # Add SSL configuration for PostgreSQL if in production
 if "postgresql" in SQLALCHEMY_DATABASE_URL and "@localhost" not in SQLALCHEMY_DATABASE_URL and "sslmode=disable" not in SQLALCHEMY_DATABASE_URL:

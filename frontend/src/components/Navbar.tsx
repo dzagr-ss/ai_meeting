@@ -20,9 +20,11 @@ import {
   Dashboard,
   Login,
   PersonAdd,
+  AdminPanelSettings,
 } from '@mui/icons-material';
 import { RootState } from '../store';
 import { logout } from '../store/slices/authSlice';
+import ThemeSwitcher from './ThemeSwitcher';
 
 const Navbar: React.FC = () => {
   const navigate = useNavigate();
@@ -48,6 +50,13 @@ const Navbar: React.FC = () => {
     navigate('/');
     setAnchorEl(null);
   };
+
+  const handleAdmin = () => {
+    navigate('/admin');
+    setAnchorEl(null);
+  };
+
+  const isAdmin = user?.user_type === 'admin';
 
   return (
     <AppBar position="static" elevation={0}>
@@ -94,6 +103,7 @@ const Navbar: React.FC = () => {
         </Box>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <ThemeSwitcher />
           {isAuthenticated ? (
             <>
               <Chip
@@ -150,12 +160,26 @@ const Navbar: React.FC = () => {
                   <Typography variant="body1" fontWeight={600} noWrap>
                     {user?.email || 'User'}
                   </Typography>
+                  {user?.user_type && (
+                    <Chip 
+                      label={user.user_type.toUpperCase()} 
+                      size="small" 
+                      color={user.user_type === 'admin' ? 'error' : user.user_type === 'pending' ? 'warning' : 'primary'}
+                      sx={{ mt: 0.5 }}
+                    />
+                  )}
                 </Box>
                 <Divider />
                 <MenuItem onClick={handleDashboard} sx={{ gap: 1.5, py: 1 }}>
                   <Dashboard fontSize="small" />
                   Dashboard
                 </MenuItem>
+                {isAdmin && (
+                  <MenuItem onClick={handleAdmin} sx={{ gap: 1.5, py: 1 }}>
+                    <AdminPanelSettings fontSize="small" />
+                    Admin Panel
+                  </MenuItem>
+                )}
                 <MenuItem onClick={handleLogout} sx={{ gap: 1.5, py: 1, color: 'error.main' }}>
                   <Logout fontSize="small" />
                   Sign out

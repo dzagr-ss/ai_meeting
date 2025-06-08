@@ -2,6 +2,7 @@ import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
 interface User {
   email: string;
+  user_type?: string;
   exp?: number;
 }
 
@@ -21,6 +22,7 @@ const decodeUserFromToken = (token: string | null): User | null => {
     const payload = JSON.parse(atob(token.split('.')[1]));
     return {
       email: payload.sub,
+      user_type: payload.user_type,
       exp: payload.exp
     };
   } catch (error) {

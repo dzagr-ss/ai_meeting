@@ -77,6 +77,7 @@ class UserCreate(UserBase):
 class User(UserBase):
     id: int
     is_active: bool
+    user_type: str
     created_at: datetime
 
     class Config:
@@ -369,6 +370,20 @@ class MeetingNotes(MeetingNotesBase):
     id: int
     meeting_id: int
     generated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# Admin schemas
+class UserUpdateType(BaseModel):
+    user_type: str = Field(..., pattern="^(admin|pending|trial|normal|pro)$")
+
+class AdminUserList(BaseModel):
+    id: int
+    email: str
+    user_type: str
+    is_active: bool
+    created_at: datetime
 
     class Config:
         from_attributes = True 

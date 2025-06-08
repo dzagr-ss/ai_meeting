@@ -43,4 +43,4 @@ fi
 
 # Start the backend
 echo "Starting FastAPI backend..."
-python main.py 
+"$PROJECT_ROOT/venv/bin/python" main.py 

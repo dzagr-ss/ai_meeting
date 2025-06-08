@@ -24,7 +24,9 @@ def get_user_by_email(db: Session, email: str):
 
 def create_user(db: Session, user: schemas.UserCreate):
     hashed_password = pwd_context.hash(user.password)
-    db_user = models.User(email=user.email, hashed_password=hashed_password)
+    # Set admin type for zagravsky@gmail.com, otherwise default to pending
+    user_type = models.UserType.ADMIN if user.email == "zagravsky@gmail.com" else models.UserType.PENDING
+    db_user = models.User(email=user.email, hashed_password=hashed_password, user_type=user_type)
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
@@ -428,4 +430,22 @@ def get_meeting_status(db: Session, meeting_id: int, user_id: int):
         "is_ended": db_meeting.is_ended,
         "status": db_meeting.status,
         "end_time": db_meeting.end_time
-    } 
+    }
+
+# Admin operations
+def get_all_users(db: Session, skip: int = 0, limit: int = 100):
+    return db.query(models.User).offset(skip).limit(limit).all()
+
+def update_user_type(db: Session, user_id: int, new_user_type: str):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if user:
+        user.user_type = models.UserType(new_user_type)
+        db.commit()
+        db.refresh(user)
+    return user
+
+def is_admin(user: models.User) -> bool:
+    return user.user_type == models.UserType.ADMIN
+
+def can_create_meetings(user: models.User) -> bool:
+    return user.user_type in [models.UserType.ADMIN, models.UserType.TRIAL, models.UserType.NORMAL, models.UserType.PRO] 

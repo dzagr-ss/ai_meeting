@@ -18,6 +18,10 @@ import {
   Alert,
   Autocomplete,
   IconButton,
+  ToggleButton,
+  ToggleButtonGroup,
+  Tabs,
+  Tab,
 } from '@mui/material';
 import {
   Add,
@@ -31,6 +35,11 @@ import {
   Edit,
   FilterList,
   Clear,
+  ViewModule,
+  CalendarMonth,
+  ChevronLeft,
+  ChevronRight,
+  Today,
 } from '@mui/icons-material';
 import {
   fetchMeetingsStart,
@@ -67,11 +76,14 @@ const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
   const { meetings, loading, selectedTags } = useAppSelector((state) => state.meeting);
-  const { token } = useAppSelector((state) => state.auth);
+  const { token, user } = useAppSelector((state) => state.auth);
   const [newMeetingTitle, setNewMeetingTitle] = useState('');
   const [availableTags, setAvailableTags] = useState<Tag[]>([]);
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
   const [selectedMeetingForTags, setSelectedMeetingForTags] = useState<Meeting | null>(null);
+  const [viewType, setViewType] = useState<'grid' | 'calendar'>('grid');
+  const [calendarView, setCalendarView] = useState<'month' | 'week' | 'day'>('month');
+  const [currentDate, setCurrentDate] = useState(new Date());
   const [snackbar, setSnackbar] = useState<{
     open: boolean;
     message: string;
@@ -109,11 +121,25 @@ const Dashboard: React.FC = () => {
   const handleCreateMeeting = async () => {
     if (!newMeetingTitle.trim()) return;
     
+    if (user?.user_type === 'pending') {
+      setSnackbar({
+        open: true,
+        message: 'Your account is pending approval. Please contact an administrator.',
+        severity: 'error',
+      });
+      return;
+    }
+    
     try {
       const response = await api.post('/meetings/', { title: newMeetingTitle });
       navigate(`/meeting/${response.data.id}`);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to create meeting:', err);
+      setSnackbar({
+        open: true,
+        message: err.response?.data?.detail || 'Failed to create meeting',
+        severity: 'error',
+      });
     }
   };
 
@@ -184,12 +210,401 @@ const Dashboard: React.FC = () => {
     dispatch(clearSelectedTags());
   };
 
-  // Filter meetings based on selected tags
+  // Calendar helper functions
+  const getDaysInMonth = (date: Date) => {
+    return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  };
+
+  const getFirstDayOfMonth = (date: Date) => {
+    return new Date(date.getFullYear(), date.getMonth(), 1).getDay();
+  };
+
+  const isSameDay = (date1: Date, date2: Date) => {
+    return (
+      date1.getFullYear() === date2.getFullYear() &&
+      date1.getMonth() === date2.getMonth() &&
+      date1.getDate() === date2.getDate()
+    );
+  };
+
+  const getMeetingsForDate = (date: Date) => {
+    return filteredMeetings.filter(meeting => {
+      const meetingDate = new Date(meeting.start_time);
+      return isSameDay(meetingDate, date);
+    });
+  };
+
+  const navigateCalendar = (direction: 'prev' | 'next') => {
+    const newDate = new Date(currentDate);
+    if (calendarView === 'month') {
+      newDate.setMonth(newDate.getMonth() + (direction === 'next' ? 1 : -1));
+    } else if (calendarView === 'week') {
+      newDate.setDate(newDate.getDate() + (direction === 'next' ? 7 : -7));
+    } else if (calendarView === 'day') {
+      newDate.setDate(newDate.getDate() + (direction === 'next' ? 1 : -1));
+    }
+    setCurrentDate(newDate);
+  };
+
+  const goToToday = () => {
+    setCurrentDate(new Date());
+  };
+
+  const renderCalendarMonth = () => {
+    const daysInMonth = getDaysInMonth(currentDate);
+    const firstDay = getFirstDayOfMonth(currentDate);
+    const today = new Date();
+    const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    
+    // Convert Sunday (0) to be 6, and subtract 1 from others to make Monday = 0
+    const adjustedFirstDay = firstDay === 0 ? 6 : firstDay - 1;
+    
+    const calendarDays = [];
+    
+    // Add empty cells for days before the first day of the month
+    for (let i = 0; i < adjustedFirstDay; i++) {
+      calendarDays.push(
+        <Paper
+          key={`empty-${i}`}
+          sx={{
+            minHeight: 120,
+            border: '1px solid',
+            borderColor: 'divider',
+            backgroundColor: 'action.disabled',
+          }}
+        />
+      );
+    }
+    
+    // Add cells for each day of the month
+    for (let day = 1; day <= daysInMonth; day++) {
+      const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+      const dayMeetings = getMeetingsForDate(date);
+      const isToday = isSameDay(date, today);
+      const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // Sunday or Saturday
+      
+      calendarDays.push(
+        <Paper
+          key={day}
+          sx={{
+            p: 1,
+            minHeight: 120,
+            border: isToday ? '2px solid' : '1px solid',
+            borderColor: isToday ? 'primary.main' : 'divider',
+            backgroundColor: (theme) => {
+              if (isToday) {
+                return theme.palette.primary.main + '0D'; // 5% opacity
+              } else if (isWeekend) {
+                return theme.palette.action.hover;
+              }
+              return theme.palette.background.paper;
+            },
+            cursor: 'pointer',
+            display: 'flex',
+            flexDirection: 'column',
+            '&:hover': {
+              backgroundColor: (theme) => {
+                if (isToday) {
+                  return theme.palette.primary.main + '26'; // 15% opacity
+                } else if (isWeekend) {
+                  return theme.palette.primary.main + '14'; // 8% opacity
+                } else {
+                  return theme.palette.primary.main + '1A'; // 10% opacity
+                }
+              },
+            },
+          }}
+        >
+          <Typography
+            variant="body2"
+            fontWeight={isToday ? 700 : 400}
+            color={isToday ? 'primary' : 'text.primary'}
+            sx={{ mb: 1, textAlign: 'left' }}
+          >
+            {day}
+          </Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, flex: 1, overflow: 'hidden' }}>
+            {dayMeetings.slice(0, 3).map(meeting => (
+              <Chip
+                key={meeting.id}
+                label={meeting.title}
+                size="small"
+                sx={{
+                  fontSize: '0.7rem',
+                  height: 18,
+                  cursor: 'pointer',
+                  '& .MuiChip-label': {
+                    px: 0.5,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  },
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(`/meeting/${meeting.id}`);
+                }}
+              />
+            ))}
+            {dayMeetings.length > 3 && (
+              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                +{dayMeetings.length - 3} more
+              </Typography>
+            )}
+          </Box>
+        </Paper>
+      );
+    }
+    
+    // Fill remaining cells to complete the grid (6 rows x 7 days = 42 cells)
+    const totalCells = 42;
+    const remainingCells = totalCells - calendarDays.length;
+    for (let i = 0; i < remainingCells; i++) {
+      calendarDays.push(
+        <Paper
+          key={`empty-end-${i}`}
+          sx={{
+            minHeight: 120,
+            border: '1px solid',
+            borderColor: 'divider',
+            backgroundColor: 'action.disabled',
+          }}
+        />
+      );
+    }
+    
+    return (
+      <Box>
+        {/* Days of week header */}
+        <Paper sx={{ mb: 2, border: '1px solid', borderColor: 'divider' }}>
+          <Grid container spacing={0}>
+            {daysOfWeek.map(day => {
+              const isWeekend = day === 'Sat' || day === 'Sun';
+              return (
+                <Grid item xs key={day}>
+                  <Box 
+                    sx={{ 
+                      p: 2, 
+                      textAlign: 'center',
+                      borderRight: day !== 'Sun' ? '1px solid' : 'none',
+                      borderColor: 'divider',
+                      backgroundColor: isWeekend ? 'action.hover' : 'action.selected'
+                    }}
+                  >
+                    <Typography 
+                      variant="subtitle2" 
+                      fontWeight={600} 
+                      color={isWeekend ? 'text.secondary' : 'text.primary'}
+                    >
+                      {day}
+                    </Typography>
+                  </Box>
+                </Grid>
+              );
+            })}
+          </Grid>
+        </Paper>
+        
+        {/* Calendar grid - 6 rows x 7 columns */}
+        <Paper sx={{ border: '1px solid', borderColor: 'divider' }}>
+          <Grid container spacing={0}>
+            {calendarDays.map((day, index) => (
+              <Grid 
+                item 
+                xs={12/7} 
+                key={index}
+                sx={{
+                  borderRight: (index + 1) % 7 !== 0 ? '1px solid' : 'none',
+                  borderBottom: index < 35 ? '1px solid' : 'none',
+                  borderColor: 'divider',
+                }}
+              >
+                {day}
+              </Grid>
+            ))}
+          </Grid>
+        </Paper>
+      </Box>
+    );
+  };
+
+  const renderCalendarWeek = () => {
+    const startOfWeek = new Date(currentDate);
+    const day = startOfWeek.getDay();
+    startOfWeek.setDate(startOfWeek.getDate() - day);
+    
+    const weekDays = [];
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(startOfWeek);
+      date.setDate(startOfWeek.getDate() + i);
+      weekDays.push(date);
+    }
+    
+    const today = new Date();
+    
+    return (
+      <Grid container spacing={2}>
+        {weekDays.map((date, index) => {
+          const dayMeetings = getMeetingsForDate(date);
+          const isToday = isSameDay(date, today);
+          const dayOfWeek = date.getDay();
+          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+          
+          return (
+            <Grid item xs key={index}>
+              <Paper
+                sx={{
+                  p: 2,
+                  minHeight: 200,
+                  border: isToday ? '2px solid' : '1px solid',
+                  borderColor: isToday ? 'primary.main' : 'divider',
+                  backgroundColor: (theme) => {
+                    if (isToday) {
+                      return theme.palette.primary.main + '0D'; // 5% opacity
+                    } else if (isWeekend) {
+                      return theme.palette.action.hover;
+                    }
+                    return theme.palette.background.paper;
+                  },
+                  transition: 'all 0.2s ease-in-out',
+                  '&:hover': {
+                    backgroundColor: (theme) => {
+                      if (isToday) {
+                        return theme.palette.primary.main + '1A'; // 10% opacity
+                      } else {
+                        return theme.palette.action.hover;
+                      }
+                    },
+                    transform: 'translateY(-2px)',
+                    boxShadow: (theme) => theme.shadows[4],
+                  },
+                }}
+              >
+                <Typography
+                  variant="h6"
+                  fontWeight={isToday ? 700 : 400}
+                  color={isToday ? 'primary' : 'text.primary'}
+                  sx={{ mb: 2 }}
+                >
+                  {date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {dayMeetings.map(meeting => (
+                    <Chip
+                      key={meeting.id}
+                      label={meeting.title}
+                      size="small"
+                      sx={{
+                        cursor: 'pointer',
+                        backgroundColor: 'primary.main',
+                        color: 'primary.contrastText',
+                        '& .MuiChip-label': {
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        },
+                        '&:hover': {
+                          backgroundColor: 'primary.dark',
+                          transform: 'scale(1.02)',
+                        },
+                        transition: 'all 0.2s ease-in-out',
+                      }}
+                      onClick={() => navigate(`/meeting/${meeting.id}`)}
+                    />
+                  ))}
+                  {dayMeetings.length === 0 && (
+                    <Typography 
+                      variant="body2" 
+                      color="text.secondary" 
+                      sx={{ 
+                        textAlign: 'center', 
+                        py: 2,
+                        fontStyle: 'italic'
+                      }}
+                    >
+                      No meetings
+                    </Typography>
+                  )}
+                </Box>
+              </Paper>
+            </Grid>
+          );
+        })}
+      </Grid>
+    );
+  };
+
+  const renderCalendarDay = () => {
+    const dayMeetings = getMeetingsForDate(currentDate);
+    const isToday = isSameDay(currentDate, new Date());
+    
+    return (
+      <Paper sx={{ p: 3 }}>
+        <Typography
+          variant="h4"
+          fontWeight={isToday ? 700 : 400}
+          color={isToday ? 'primary' : 'text.primary'}
+          sx={{ mb: 3 }}
+        >
+          {currentDate.toLocaleDateString('en-US', { 
+            weekday: 'long', 
+            year: 'numeric', 
+            month: 'long', 
+            day: 'numeric' 
+          })}
+        </Typography>
+        
+        {dayMeetings.length === 0 ? (
+          <Box sx={{ textAlign: 'center', py: 4 }}>
+            <Typography variant="h6" color="text.secondary">
+              No meetings scheduled for this day
+            </Typography>
+          </Box>
+        ) : (
+          <Grid container spacing={2}>
+            {dayMeetings.map(meeting => (
+              <Grid item xs={12} sm={6} md={4} key={meeting.id}>
+                <Card
+                  sx={{
+                    cursor: 'pointer',
+                    '&:hover': {
+                      boxShadow: 3,
+                    },
+                  }}
+                  onClick={() => navigate(`/meeting/${meeting.id}`)}
+                >
+                  <CardContent>
+                    <Typography variant="h6" gutterBottom>
+                      {meeting.title}
+                    </Typography>
+                    <Chip
+                      icon={getStatusIcon(meeting.status)}
+                      label={meeting.status}
+                      size="small"
+                      color={getStatusColor(meeting.status) as any}
+                    />
+                    <Box sx={{ mt: 1 }}>
+                      {meeting.tags.slice(0, 3).map(tag => (
+                        <TagChip key={tag.id} tag={tag} size="small" />
+                      ))}
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
+        )}
+      </Paper>
+    );
+  };
+
+  // Filter meetings based on selected tags and sort by most recent first
   const filteredMeetings = selectedTags.length > 0 
     ? meetings.filter(meeting => 
         meeting.tags.some(tag => selectedTags.includes(tag.name))
-      )
-    : meetings;
+      ).sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime())
+    : [...meetings].sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime());
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -257,6 +672,31 @@ const Dashboard: React.FC = () => {
           <Typography variant="h6" color="text.secondary" sx={{ mb: 4 }}>
             Manage your meetings and transcriptions
           </Typography>
+
+          {/* User Status Alert for Pending Users */}
+          {user?.user_type === 'pending' && (
+            <Alert 
+              severity="warning" 
+              sx={{ 
+                mb: 4,
+                borderRadius: 2,
+                '& .MuiAlert-message': {
+                  width: '100%'
+                }
+              }}
+            >
+              <Box>
+                <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
+                  Account Pending Approval
+                </Typography>
+                <Typography variant="body2">
+                  Your account is currently pending approval from an administrator. 
+                  You won't be able to create meetings or start transcriptions until your account is approved.
+                  Please contact an administrator for assistance.
+                </Typography>
+              </Box>
+            </Alert>
+          )}
 
           {/* Quick Stats */}
           <Grid container spacing={3} sx={{ mb: 4 }}>
@@ -348,7 +788,8 @@ const Dashboard: React.FC = () => {
                 label="Meeting Title"
                 value={newMeetingTitle}
                 onChange={(e) => setNewMeetingTitle(e.target.value)}
-                placeholder="e.g., Weekly Team Standup"
+                placeholder={user?.user_type === 'pending' ? "Account pending approval" : "e.g., Weekly Team Standup"}
+                disabled={user?.user_type === 'pending'}
                 sx={{ flexGrow: 1, minWidth: 300 }}
                 onKeyPress={(e) => {
                   if (e.key === 'Enter') {
@@ -360,7 +801,7 @@ const Dashboard: React.FC = () => {
                 variant="contained"
                 size="large"
                 onClick={handleCreateMeeting}
-                disabled={!newMeetingTitle.trim()}
+                disabled={!newMeetingTitle.trim() || user?.user_type === 'pending'}
                 startIcon={<Add />}
                 sx={{
                   background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
@@ -425,144 +866,221 @@ const Dashboard: React.FC = () => {
           )}
         </Box>
 
-        {/* Meetings Grid */}
+        {/* View Toggle Section */}
+        <Box sx={{ mb: 4 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+            <ToggleButtonGroup
+              value={viewType}
+              exclusive
+              onChange={(event, newView) => {
+                if (newView !== null) {
+                  setViewType(newView);
+                }
+              }}
+              aria-label="view type"
+            >
+              <ToggleButton value="grid" aria-label="grid view">
+                <ViewModule sx={{ mr: 1 }} />
+                Grid
+              </ToggleButton>
+              <ToggleButton value="calendar" aria-label="calendar view">
+                <CalendarMonth sx={{ mr: 1 }} />
+                Calendar
+              </ToggleButton>
+            </ToggleButtonGroup>
+
+            {viewType === 'calendar' && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <IconButton onClick={() => navigateCalendar('prev')}>
+                  <ChevronLeft />
+                </IconButton>
+                <Typography variant="h6" sx={{ minWidth: 200, textAlign: 'center' }}>
+                  {calendarView === 'month' && 
+                    currentDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
+                  }
+                  {calendarView === 'week' && 
+                    `Week of ${currentDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                  }
+                  {calendarView === 'day' && 
+                    currentDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+                  }
+                </Typography>
+                <IconButton onClick={() => navigateCalendar('next')}>
+                  <ChevronRight />
+                </IconButton>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={goToToday}
+                  startIcon={<Today />}
+                >
+                  Today
+                </Button>
+              </Box>
+            )}
+          </Box>
+
+          {viewType === 'calendar' && (
+            <Tabs
+              value={calendarView}
+              onChange={(event, newValue) => setCalendarView(newValue)}
+              aria-label="calendar view tabs"
+            >
+              <Tab label="Month" value="month" />
+              <Tab label="Week" value="week" />
+              <Tab label="Day" value="day" />
+            </Tabs>
+          )}
+        </Box>
+
+        {/* Meetings Section */}
         <Box>
           <Typography variant="h5" fontWeight={600} gutterBottom sx={{ mb: 3 }}>
-            Your Meetings
+            {viewType === 'grid' ? 'Your Meetings' : 'Calendar View'}
           </Typography>
           
-          {filteredMeetings.length === 0 ? (
-            <Paper
-              sx={{
-                p: 6,
-                textAlign: 'center',
-                borderRadius: 3,
-                border: '2px dashed #e2e8f0',
-                backgroundColor: 'transparent',
-              }}
-            >
-              <VideoCall sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
-              <Typography variant="h6" color="text.secondary" gutterBottom>
-                {selectedTags.length > 0 ? 'No meetings match the selected tags' : 'No meetings yet'}
-              </Typography>
-              <Typography variant="body1" color="text.secondary">
-                {selectedTags.length > 0 
-                  ? 'Try adjusting your tag filters or create a new meeting'
-                  : 'Create your first meeting to get started with AI transcription'
-                }
-              </Typography>
-            </Paper>
-          ) : (
-            <Grid container spacing={3}>
-              {filteredMeetings.map((meeting, index) => (
-                <Grid item xs={12} sm={6} lg={4} key={meeting.id}>
-                  <Fade in={true} timeout={300 + index * 100}>
-                    <Card
-                      sx={{
-                        height: '100%',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease-in-out',
-                        '&:hover': {
-                          transform: 'translateY(-4px)',
-                          boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)',
-                        },
-                      }}
-                      onClick={(e) => {
-                        // Only navigate if the click didn't come from the dropdown menu or tag manager
-                        if (!(e.target as HTMLElement).closest('[data-dropdown-menu]') && 
-                            !(e.target as HTMLElement).closest('[data-tag-manager]')) {
-                          navigate(`/meeting/${meeting.id}`);
-                        }
-                      }}
-                    >
-                      <CardContent sx={{ flexGrow: 1, p: 3 }}>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-                          <Typography variant="h6" component="h2" fontWeight={600} sx={{ flexGrow: 1, pr: 1 }}>
-                            {meeting.title}
-                          </Typography>
-                          <MeetingDropdownMenu
-                            meetingId={meeting.id}
-                            meetingTitle={meeting.title}
-                            onRename={handleRenameMeeting}
-                            onDelete={handleDeleteMeeting}
-                          />
-                        </Box>
-                        
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                          <Chip
-                            icon={getStatusIcon(meeting.status)}
-                            label={meeting.status.charAt(0).toUpperCase() + meeting.status.slice(1)}
-                            color={getStatusColor(meeting.status) as any}
-                            size="small"
-                            variant="outlined"
-                          />
-                        </Box>
-
-                        {/* Tags Section */}
-                        <Box sx={{ mb: 3 }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                            <LocalOffer sx={{ fontSize: 16, color: 'text.secondary' }} />
-                            <Typography variant="caption" color="text.secondary">
-                              Tags
+          {viewType === 'grid' ? (
+            // Grid View
+            filteredMeetings.length === 0 ? (
+              <Paper
+                sx={{
+                  p: 6,
+                  textAlign: 'center',
+                  borderRadius: 3,
+                  border: '2px dashed #e2e8f0',
+                  backgroundColor: 'transparent',
+                }}
+              >
+                <VideoCall sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
+                <Typography variant="h6" color="text.secondary" gutterBottom>
+                  {selectedTags.length > 0 ? 'No meetings match the selected tags' : 'No meetings yet'}
+                </Typography>
+                <Typography variant="body1" color="text.secondary">
+                  {selectedTags.length > 0 
+                    ? 'Try adjusting your tag filters or create a new meeting'
+                    : 'Create your first meeting to get started with AI transcription'
+                  }
+                </Typography>
+              </Paper>
+            ) : (
+              <Grid container spacing={3}>
+                {filteredMeetings.map((meeting, index) => (
+                  <Grid item xs={12} sm={6} lg={4} key={meeting.id}>
+                    <Fade in={true} timeout={300 + index * 100}>
+                      <Card
+                        sx={{
+                          height: '100%',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease-in-out',
+                          '&:hover': {
+                            transform: 'translateY(-4px)',
+                            boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)',
+                          },
+                        }}
+                        onClick={(e) => {
+                          // Only navigate if the click didn't come from the dropdown menu or tag manager
+                          if (!(e.target as HTMLElement).closest('[data-dropdown-menu]') && 
+                              !(e.target as HTMLElement).closest('[data-tag-manager]')) {
+                            navigate(`/meeting/${meeting.id}`);
+                          }
+                        }}
+                      >
+                        <CardContent sx={{ flexGrow: 1, p: 3 }}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                            <Typography variant="h6" component="h2" fontWeight={600} sx={{ flexGrow: 1, pr: 1 }}>
+                              {meeting.title}
                             </Typography>
-                            <IconButton
+                            <MeetingDropdownMenu
+                              meetingId={meeting.id}
+                              meetingTitle={meeting.title}
+                              onRename={handleRenameMeeting}
+                              onDelete={handleDeleteMeeting}
+                            />
+                          </Box>
+                          
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                            <Chip
+                              icon={getStatusIcon(meeting.status)}
+                              label={meeting.status.charAt(0).toUpperCase() + meeting.status.slice(1)}
+                              color={getStatusColor(meeting.status) as any}
                               size="small"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleManageTags(meeting);
-                              }}
-                              data-tag-manager
-                              sx={{ ml: 'auto' }}
-                            >
-                              <Edit sx={{ fontSize: 16 }} />
-                            </IconButton>
+                              variant="outlined"
+                            />
                           </Box>
-                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, minHeight: 24 }}>
-                            {meeting.tags.length > 0 ? (
-                              meeting.tags.slice(0, 5).map(tag => (
-                                <TagChip key={tag.id} tag={tag} size="small" />
-                              ))
-                            ) : (
+
+                          {/* Tags Section */}
+                          <Box sx={{ mb: 3 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                              <LocalOffer sx={{ fontSize: 16, color: 'text.secondary' }} />
                               <Typography variant="caption" color="text.secondary">
-                                No tags
+                                Tags
                               </Typography>
-                            )}
-                            {meeting.tags.length > 5 && (
-                              <Chip
-                                label={`+${meeting.tags.length - 5} more`}
+                              <IconButton
                                 size="small"
-                                variant="outlined"
-                                sx={{ fontSize: '0.7rem' }}
-                              />
-                            )}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleManageTags(meeting);
+                                }}
+                                data-tag-manager
+                                sx={{ ml: 'auto' }}
+                              >
+                                <Edit sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Box>
+                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, minHeight: 24 }}>
+                              {meeting.tags.length > 0 ? (
+                                meeting.tags.slice(0, 5).map(tag => (
+                                  <TagChip key={tag.id} tag={tag} size="small" />
+                                ))
+                              ) : (
+                                <Typography variant="caption" color="text.secondary">
+                                  No tags
+                                </Typography>
+                              )}
+                              {meeting.tags.length > 5 && (
+                                <Chip
+                                  label={`+${meeting.tags.length - 5} more`}
+                                  size="small"
+                                  variant="outlined"
+                                  sx={{ fontSize: '0.7rem' }}
+                                />
+                              )}
+                            </Box>
                           </Box>
-                        </Box>
 
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                          Created on {new Date(meeting.start_time).toLocaleDateString()}
-                        </Typography>
+                          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                            Created on {new Date(meeting.start_time).toLocaleDateString()}
+                          </Typography>
 
-                        <Button
-                          variant="contained"
-                          fullWidth
-                          startIcon={<VideoCall />}
-                          sx={{
-                            background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
-                            '&:hover': {
-                              background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-                            },
-                          }}
-                        >
-                          Join Meeting
-                        </Button>
-                      </CardContent>
-                    </Card>
-                  </Fade>
-                </Grid>
-              ))}
-            </Grid>
+                          <Button
+                            variant="contained"
+                            fullWidth
+                            startIcon={<VideoCall />}
+                            sx={{
+                              background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+                              '&:hover': {
+                                background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+                              },
+                            }}
+                          >
+                            Join Meeting
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    </Fade>
+                  </Grid>
+                ))}
+              </Grid>
+            )
+          ) : (
+            // Calendar View
+            <Box>
+              {calendarView === 'month' && renderCalendarMonth()}
+              {calendarView === 'week' && renderCalendarWeek()}
+              {calendarView === 'day' && renderCalendarDay()}
+            </Box>
           )}
         </Box>
       </Container>

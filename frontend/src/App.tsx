@@ -5,7 +5,7 @@ import { Box, CssBaseline, Snackbar, Alert } from '@mui/material';
 import { ThemeProvider } from '@mui/material/styles';
 import { RootState } from './store';
 import { validateToken } from './store/slices/authSlice';
-import theme from './theme';
+import { createAppTheme } from './theme';
 
 // Components
 import Navbar from './components/Navbar';
@@ -15,11 +15,16 @@ import Dashboard from './pages/Dashboard';
 import MeetingRoom from './pages/MeetingRoom';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
+import AdminPanel from './pages/AdminPanel';
 
 const App: React.FC = () => {
   const { isAuthenticated } = useSelector((state: RootState) => state.auth);
+  const { mode } = useSelector((state: RootState) => state.theme);
   const dispatch = useDispatch();
   const [tokenExpiredMessage, setTokenExpiredMessage] = useState<string | null>(null);
+  
+  // Create theme based on current mode
+  const theme = createAppTheme(mode);
 
   useEffect(() => {
     // Listen for token expiration events
@@ -95,6 +100,10 @@ const App: React.FC = () => {
             <Route
               path="/meeting/:id"
               element={isAuthenticated ? <MeetingRoom /> : <Navigate to="/login" />}
+            />
+            <Route
+              path="/admin"
+              element={isAuthenticated ? <AdminPanel /> : <Navigate to="/login" />}
             />
             {/* Catch all route */}
             <Route

@@ -322,70 +322,83 @@ async def add_security_headers(request: Request, call_next):
     
     return response
 
-# CORS middleware with secure configuration
+# CORS middleware with simple local development support
 def get_allowed_origins():
     """Get allowed origins from settings with validation"""
-    try:
-        # Use settings object instead of direct environment access
-        origins_str = settings.BACKEND_CORS_ORIGINS
-        print(f"[CORS] Raw origins string: {origins_str}")
-        
-        if origins_str:
-            # Parse comma-separated origins (handle semicolons too)
-            origins = []
-            # Replace semicolons with commas and split, then clean up each origin
-            normalized_str = origins_str.replace(';', ',').replace('\n', ',')
+    is_production = os.getenv("ENVIRONMENT", "development") == "production"
+    
+    if is_production:
+        try:
+            # Use settings object instead of direct environment access
+            origins_str = settings.BACKEND_CORS_ORIGINS
+            print(f"[CORS] Raw origins string: {origins_str}")
             
-            for origin in normalized_str.split(","):
-                # Clean up the origin
-                origin = origin.strip().strip("'\"").rstrip(';,').strip()
+            if origins_str:
+                # Parse comma-separated origins (handle semicolons too)
+                origins = []
+                # Replace semicolons with commas and split, then clean up each origin
+                normalized_str = origins_str.replace(';', ',').replace('\n', ',')
                 
-                # Remove any non-printable characters
-                origin = ''.join(char for char in origin if char.isprintable())
+                for origin in normalized_str.split(","):
+                    # Clean up the origin
+                    origin = origin.strip().strip("'\"").rstrip(';,').strip()
+                    
+                    # Remove any non-printable characters
+                    origin = ''.join(char for char in origin if char.isprintable())
+                    
+                    # Additional cleaning to remove any lingering semicolons or commas
+                    while origin.endswith(';') or origin.endswith(','):
+                        origin = origin.rstrip(';,').strip()
+                    
+                    if origin and (origin.startswith(("http://", "https://")) or origin == "*"):
+                        origins.append(origin)
+                        print(f"[CORS] Added origin: {origin}")
                 
-                # Additional cleaning to remove any lingering semicolons or commas
-                while origin.endswith(';') or origin.endswith(','):
-                    origin = origin.rstrip(';,').strip()
-                
-                if origin and (origin.startswith(("http://", "https://")) or origin == "*"):
-                    origins.append(origin)
-                    print(f"[CORS] Added origin: {origin}")
+                if origins:
+                    print(f"[CORS] Final origins: {origins}")
+                    return origins
             
-            if origins:
-                print(f"[CORS] Final origins: {origins}")
-                return origins
-        
-        # Default development origins if nothing valid found
-        default_origins = [
+            # Default production origins if nothing valid found
+            default_origins = [
+                "https://ai-meeting-indol.vercel.app",
+            ]
+            print(f"[CORS] Using default production origins: {default_origins}")
+            return default_origins
+            
+        except Exception as e:
+            app_logger.error(f"Error parsing CORS origins: {e}")
+            print(f"[CORS] Exception occurred: {e}")
+            # Return safe defaults for production
+            default_origins = [
+                "https://ai-meeting-indol.vercel.app",
+            ]
+            print(f"[CORS] Using fallback production origins: {default_origins}")
+            return default_origins
+    else:
+        # Development - allow all common local development origins
+        dev_origins = [
             "http://localhost:3000",
             "http://127.0.0.1:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3001",
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
         ]
-        print(f"[CORS] Using default origins: {default_origins}")
-        return default_origins
-        
-    except Exception as e:
-        app_logger.error(f"Error parsing CORS origins: {e}")
-        print(f"[CORS] Exception occurred: {e}")
-        # Return safe defaults
-        default_origins = [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-        ]
-        print(f"[CORS] Using fallback default origins: {default_origins}")
-        return default_origins
+        print(f"[CORS] Using development origins: {dev_origins}")
+        return dev_origins
 
 allowed_origins = get_allowed_origins()
 app_logger.info(f"CORS allowed origins: {allowed_origins}")
 
-# Restrict CORS in production
+# Environment detection
 is_production = os.getenv("ENVIRONMENT", "development") == "production"
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_credentials=False,  # Disable credentials for security
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Restrict methods
-    allow_headers=[
+    allow_credentials=True,  # Enable credentials for local development
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],  # Add more methods for development
+    allow_headers=["*"] if not is_production else [
         "Accept",
         "Accept-Language", 
         "Content-Language",
@@ -393,7 +406,7 @@ app.add_middleware(
         "Authorization",
         "X-Requested-With",
         "Cache-Control"
-    ],  # Restrict headers
+    ],  # Allow all headers in development, restrict in production
     expose_headers=["X-Total-Count"],  # Only expose necessary headers
     max_age=600 if is_production else 86400,  # Cache preflight for 10 min in prod, 24h in dev
 )
@@ -981,6 +994,14 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         raise credentials_exception
     return user
 
+async def get_admin_user(current_user: models.User = Depends(get_current_user)):
+    if not crud.is_admin(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+    return current_user
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to Meeting Transcription API"}
@@ -1063,7 +1084,7 @@ async def login(request: Request, user_data: schemas.UserLogin, db: Session = De
         })
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     
-    access_token = crud.create_access_token(data={"sub": user.email})
+    access_token = crud.create_access_token(data={"sub": user.email, "user_type": user.user_type.value})
     log_audit_event("user_login", user.id, "authentication", details={
         "ip_address": client_ip
     })
@@ -1119,6 +1140,13 @@ def create_meeting(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Check if user can create meetings
+    if not crud.can_create_meetings(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is pending approval. Please contact an administrator to activate your account before creating meetings."
+        )
+    
     # Set default meeting title if not provided
     if not meeting.title:
         current_time = datetime.now()
@@ -1590,11 +1618,16 @@ async def stream_audio(
                 await websocket.close(code=1008, reason="Invalid token: no email")
                 return
                 
-            # Optional: verify user exists in DB if necessary for this endpoint
-            # user = crud.get_user_by_email(db, email=email)
-            # if user is None:
-            #     await websocket.close(code=1008, reason="Invalid token: user not found")
-            #     return
+            # Verify user exists and can create meetings/transcriptions
+            user = crud.get_user_by_email(db, email=email)
+            if user is None:
+                await websocket.close(code=1008, reason="Invalid token: user not found")
+                return
+                
+            # Check if user can create meetings/transcriptions
+            if not crud.can_create_meetings(user):
+                await websocket.close(code=1008, reason="Account pending approval")
+                return
 
         except JWTError:
             await websocket.close(code=1008, reason="Invalid or expired token")
@@ -3888,6 +3921,59 @@ def debug_meeting_audio(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Debug error: {str(e)}"
         )
+
+# Admin endpoints
+@app.get("/admin/users", response_model=List[schemas.AdminUserList])
+@limiter.limit("30/minute")
+def get_all_users_admin(
+    request: Request,
+    skip: int = 0,
+    limit: int = 100,
+    admin_user: models.User = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    users = crud.get_all_users(db, skip=skip, limit=limit)
+    return users
+
+@app.put("/admin/users/{user_id}/type")
+@limiter.limit("20/minute")
+def update_user_type_admin(
+    request: Request,
+    user_id: int,
+    user_update: schemas.UserUpdateType,
+    admin_user: models.User = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    updated_user = crud.update_user_type(db, user_id, user_update.user_type)
+    if not updated_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": "User type updated successfully", "user": updated_user}
+
+@app.get("/debug/config")
+async def debug_config():
+    """Debug endpoint to check configuration"""
+    from config import settings
+    import os
+    from database import SessionLocal
+    from models import User
+    
+    db = SessionLocal()
+    users = db.query(User).all()
+    user_list = [{"email": u.email, "user_type": str(u.user_type), "active": u.is_active} for u in users]
+    db.close()
+    
+    return {
+        "database_url": settings.DATABASE_URL,
+        "environment": settings.ENVIRONMENT,
+        "secret_key_length": len(settings.SECRET_KEY),
+        "users_count": len(user_list),
+        "users": user_list,
+        "cwd": os.getcwd(),
+        "env_vars": {
+            "DATABASE_URL": os.getenv("DATABASE_URL"),
+            "ENVIRONMENT": os.getenv("ENVIRONMENT")
+        }
+    }
 
 if __name__ == "__main__":
     # Load environment variables from .env file
