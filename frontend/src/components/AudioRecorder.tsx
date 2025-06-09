@@ -1249,6 +1249,10 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
             }
             
             console.log('[AudioRecorder] Meeting ended process completed successfully');
+            
+            // Refresh the page to show the updated meeting summary and status
+            console.log('[AudioRecorder] Refreshing page to display updated meeting status');
+            window.location.reload();
         } catch (error) {
             console.error('[AudioRecorder] Error in meeting ended process:', error);
             setError(`Failed to process meeting summary: ${error instanceof Error ? error.message : 'Unknown error'}`);

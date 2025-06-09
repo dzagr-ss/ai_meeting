@@ -267,7 +267,7 @@ const Dashboard: React.FC = () => {
         <Paper
           key={`empty-${i}`}
           sx={{
-            minHeight: 120,
+            minHeight: { xs: 80, sm: 120 },
             border: '1px solid',
             borderColor: 'divider',
             backgroundColor: 'action.disabled',
@@ -288,8 +288,8 @@ const Dashboard: React.FC = () => {
         <Paper
           key={day}
           sx={{
-            p: 1,
-            minHeight: 120,
+            p: { xs: 0.5, sm: 1 },
+            minHeight: { xs: 80, sm: 120 },
             border: isToday ? '2px solid' : '1px solid',
             borderColor: isToday ? 'primary.main' : 'divider',
             backgroundColor: (theme) => {
@@ -303,6 +303,7 @@ const Dashboard: React.FC = () => {
             cursor: 'pointer',
             display: 'flex',
             flexDirection: 'column',
+            overflow: 'hidden',
             '&:hover': {
               backgroundColor: (theme) => {
                 if (isToday) {
@@ -320,22 +321,26 @@ const Dashboard: React.FC = () => {
             variant="body2"
             fontWeight={isToday ? 700 : 400}
             color={isToday ? 'primary' : 'text.primary'}
-            sx={{ mb: 1, textAlign: 'left' }}
+            sx={{ 
+              mb: { xs: 0.5, sm: 1 }, 
+              textAlign: 'left',
+              fontSize: { xs: '0.75rem', sm: '0.875rem' }
+            }}
           >
             {day}
           </Typography>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, flex: 1, overflow: 'hidden' }}>
-            {dayMeetings.slice(0, 3).map(meeting => (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 0.25, sm: 0.5 }, flex: 1, overflow: 'hidden' }}>
+            {dayMeetings.slice(0, 2).map(meeting => (
               <Chip
                 key={meeting.id}
                 label={meeting.title}
                 size="small"
                 sx={{
-                  fontSize: '0.7rem',
-                  height: 18,
+                  fontSize: { xs: '0.6rem', sm: '0.7rem' },
+                  height: { xs: 16, sm: 18 },
                   cursor: 'pointer',
                   '& .MuiChip-label': {
-                    px: 0.5,
+                    px: { xs: 0.25, sm: 0.5 },
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
@@ -347,9 +352,13 @@ const Dashboard: React.FC = () => {
                 }}
               />
             ))}
-            {dayMeetings.length > 3 && (
-              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
-                +{dayMeetings.length - 3} more
+            {dayMeetings.length > 2 && (
+              <Typography 
+                variant="caption" 
+                color="text.secondary" 
+                sx={{ fontSize: { xs: '0.55rem', sm: '0.65rem' } }}
+              >
+                +{dayMeetings.length - 2} more
               </Typography>
             )}
           </Box>
@@ -365,7 +374,7 @@ const Dashboard: React.FC = () => {
         <Paper
           key={`empty-end-${i}`}
           sx={{
-            minHeight: 120,
+            minHeight: { xs: 80, sm: 120 },
             border: '1px solid',
             borderColor: 'divider',
             backgroundColor: 'action.disabled',
@@ -377,42 +386,52 @@ const Dashboard: React.FC = () => {
     return (
       <Box>
         {/* Days of week header */}
-        <Paper sx={{ mb: 2, border: '1px solid', borderColor: 'divider' }}>
-          <Grid container spacing={0}>
+        <Paper sx={{ mb: 2, border: '1px solid', borderColor: 'divider', overflowX: 'auto' }}>
+          <Box 
+            sx={{ 
+              display: 'grid',
+              gridTemplateColumns: 'repeat(7, 1fr)',
+              minWidth: { xs: '350px', sm: 'auto' }
+            }}
+          >
             {daysOfWeek.map(day => {
               const isWeekend = day === 'Sat' || day === 'Sun';
               return (
-                <Grid item xs key={day}>
-                  <Box 
-                    sx={{ 
-                      p: 2, 
-                      textAlign: 'center',
-                      borderRight: day !== 'Sun' ? '1px solid' : 'none',
-                      borderColor: 'divider',
-                      backgroundColor: isWeekend ? 'action.hover' : 'action.selected'
-                    }}
+                <Box 
+                  key={day}
+                  sx={{ 
+                    p: { xs: 1, sm: 2 }, 
+                    textAlign: 'center',
+                    borderRight: day !== 'Sun' ? '1px solid' : 'none',
+                    borderColor: 'divider',
+                    backgroundColor: isWeekend ? 'action.hover' : 'action.selected'
+                  }}
+                >
+                  <Typography 
+                    variant="subtitle2" 
+                    fontWeight={600} 
+                    color={isWeekend ? 'text.secondary' : 'text.primary'}
+                    sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}
                   >
-                    <Typography 
-                      variant="subtitle2" 
-                      fontWeight={600} 
-                      color={isWeekend ? 'text.secondary' : 'text.primary'}
-                    >
-                      {day}
-                    </Typography>
-                  </Box>
-                </Grid>
+                    {day}
+                  </Typography>
+                </Box>
               );
             })}
-          </Grid>
+          </Box>
         </Paper>
         
         {/* Calendar grid - 6 rows x 7 columns */}
-        <Paper sx={{ border: '1px solid', borderColor: 'divider' }}>
-          <Grid container spacing={0}>
+        <Paper sx={{ border: '1px solid', borderColor: 'divider', overflowX: 'auto' }}>
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(7, 1fr)',
+              minWidth: { xs: '350px', sm: 'auto' }
+            }}
+          >
             {calendarDays.map((day, index) => (
-              <Grid 
-                item 
-                xs={12/7} 
+              <Box
                 key={index}
                 sx={{
                   borderRight: (index + 1) % 7 !== 0 ? '1px solid' : 'none',
@@ -421,9 +440,9 @@ const Dashboard: React.FC = () => {
                 }}
               >
                 {day}
-              </Grid>
+              </Box>
             ))}
-          </Grid>
+          </Box>
         </Paper>
       </Box>
     );
@@ -868,7 +887,14 @@ const Dashboard: React.FC = () => {
 
         {/* View Toggle Section */}
         <Box sx={{ mb: 4 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Box sx={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: { xs: 'stretch', sm: 'center' }, 
+            mb: 2,
+            flexDirection: { xs: 'column', sm: 'row' },
+            gap: { xs: 2, sm: 0 }
+          }}>
             <ToggleButtonGroup
               value={viewType}
               exclusive
@@ -878,23 +904,39 @@ const Dashboard: React.FC = () => {
                 }
               }}
               aria-label="view type"
+              size={window.innerWidth < 600 ? 'small' : 'medium'}
+              sx={{ alignSelf: { xs: 'center', sm: 'flex-start' } }}
             >
               <ToggleButton value="grid" aria-label="grid view">
-                <ViewModule sx={{ mr: 1 }} />
-                Grid
+                <ViewModule sx={{ mr: { xs: 0.5, sm: 1 } }} />
+                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Grid</Box>
               </ToggleButton>
               <ToggleButton value="calendar" aria-label="calendar view">
-                <CalendarMonth sx={{ mr: 1 }} />
-                Calendar
+                <CalendarMonth sx={{ mr: { xs: 0.5, sm: 1 } }} />
+                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Calendar</Box>
               </ToggleButton>
             </ToggleButtonGroup>
 
             {viewType === 'calendar' && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <IconButton onClick={() => navigateCalendar('prev')}>
+              <Box sx={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: { xs: 1, sm: 2 },
+                flexWrap: { xs: 'wrap', sm: 'nowrap' },
+                justifyContent: { xs: 'center', sm: 'flex-end' }
+              }}>
+                <IconButton onClick={() => navigateCalendar('prev')} size={window.innerWidth < 600 ? 'small' : 'medium'}>
                   <ChevronLeft />
                 </IconButton>
-                <Typography variant="h6" sx={{ minWidth: 200, textAlign: 'center' }}>
+                <Typography 
+                  variant="h6" 
+                  sx={{ 
+                    minWidth: { xs: 'auto', sm: 200 }, 
+                    textAlign: 'center',
+                    fontSize: { xs: '1rem', sm: '1.25rem' },
+                    flexShrink: 0
+                  }}
+                >
                   {calendarView === 'month' && 
                     currentDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
                   }
@@ -905,7 +947,7 @@ const Dashboard: React.FC = () => {
                     currentDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
                   }
                 </Typography>
-                <IconButton onClick={() => navigateCalendar('next')}>
+                <IconButton onClick={() => navigateCalendar('next')} size={window.innerWidth < 600 ? 'small' : 'medium'}>
                   <ChevronRight />
                 </IconButton>
                 <Button
@@ -913,6 +955,7 @@ const Dashboard: React.FC = () => {
                   size="small"
                   onClick={goToToday}
                   startIcon={<Today />}
+                  sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}
                 >
                   Today
                 </Button>
