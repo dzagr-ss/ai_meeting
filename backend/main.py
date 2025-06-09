@@ -1092,6 +1092,13 @@ async def login(request: Request, user_data: schemas.UserLogin, db: Session = De
         })
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     
+    # Defensive check: if user_type is None, set it to NORMAL and update in database
+    if user.user_type is None:
+        from backend.models import UserType
+        user.user_type = UserType.NORMAL
+        db.commit()
+        db.refresh(user)
+    
     access_token = crud.create_access_token(data={"sub": user.email, "user_type": user.user_type.value})
     log_audit_event("user_login", user.id, "authentication", details={
         "ip_address": client_ip

@@ -17,16 +17,25 @@ def fix_migration_state():
         # Get database URL from settings
         settings = get_settings()
         
-        # Create database engine
+        # Create database engine with autocommit
         engine = create_engine(settings.DATABASE_URL)
         
         print("🔧 Fixing existing user data...")
         
         # Set default user_type for existing users who have NULL values
-        with engine.connect() as conn:
+        with engine.begin() as conn:  # Use begin() for auto-commit transaction
             result = conn.execute(text("UPDATE users SET user_type = 'NORMAL' WHERE user_type IS NULL"))
-            conn.commit()
             print(f"✅ Updated {result.rowcount} users with default user_type")
+        
+        # Also check current state
+        with engine.connect() as conn:
+            count_result = conn.execute(text("SELECT COUNT(*) FROM users WHERE user_type IS NULL"))
+            null_count = count_result.scalar()
+            print(f"📊 Users with NULL user_type after update: {null_count}")
+            
+            total_result = conn.execute(text("SELECT COUNT(*) FROM users"))
+            total_count = total_result.scalar()
+            print(f"📊 Total users in database: {total_count}")
         
         # Create alembic config
         alembic_cfg = Config("alembic.ini")
@@ -44,6 +53,8 @@ def fix_migration_state():
         
     except Exception as e:
         print(f"❌ Error fixing migration state: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
