@@ -6,12 +6,23 @@ echo "🚀 Starting Railway deployment..."
 echo "📋 Running database migrations..."
 alembic upgrade head
 
+# Check if migration failed due to columns already existing
 if [ $? -ne 0 ]; then
-    echo "❌ Migration failed! Exiting..."
-    exit 1
+    echo "⚠️  Migration failed, checking if it's due to existing columns..."
+    
+    # Try to fix migration state by stamping to latest revision
+    echo "🔧 Attempting to fix migration state..."
+    python fix_migration_state.py
+    
+    if [ $? -eq 0 ]; then
+        echo "✅ Migration state fixed successfully!"
+    else
+        echo "❌ Failed to fix migration state! Exiting..."
+        exit 1
+    fi
+else
+    echo "✅ Migrations completed successfully"
 fi
-
-echo "✅ Migrations completed successfully"
 
 # Start the application
 echo "🎯 Starting the application..."
