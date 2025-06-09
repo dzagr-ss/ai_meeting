@@ -1094,7 +1094,7 @@ async def login(request: Request, user_data: schemas.UserLogin, db: Session = De
     
     # Defensive check: if user_type is None, set it to NORMAL and update in database
     if user.user_type is None:
-        from backend.models import UserType
+        from models import UserType
         user.user_type = UserType.NORMAL
         db.commit()
         db.refresh(user)

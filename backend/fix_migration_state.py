@@ -9,7 +9,7 @@ import sys
 from alembic.config import Config
 from alembic import command
 from sqlalchemy import create_engine, text
-from backend.config import get_settings
+from config import get_settings
 
 def fix_migration_state():
     """Stamp the database to the current migration state and fix data"""
