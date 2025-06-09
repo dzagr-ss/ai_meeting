@@ -8,3 +8,4 @@ Do not do refactoring of code unless I explicitly ask to do it.
 Do not fix style in the existing code unless I ask for that. 
 Do not add or remove new lines in the end of the code (i.e. leave it as is either with or without). 
 Do not remove existing comments unless I explicitly ask for it or we're removing that code completely.
+Do not change .env file unless I explicitly ask for it.

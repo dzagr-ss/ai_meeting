@@ -300,7 +300,7 @@ const Register: React.FC = () => {
         {/* Footer */}
         <Box sx={{ textAlign: 'center', mt: 4 }}>
           <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.8)' }}>
-            © 2024 Meeting Transcription App. All rights reserved.
+            © 2025 Meeting Transcription App. All rights reserved.
           </Typography>
         </Box>
       </Container>

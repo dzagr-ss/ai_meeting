@@ -1,9 +1,11 @@
 import React from 'react';
 import { Box, Typography, Chip, Paper, Grid } from '@mui/material';
 import { getSpeakerColor, getAllSpeakerColors } from '../utils/speakerColors';
+import { useAppSelector } from '../store/hooks';
 
 const SpeakerColorDemo: React.FC = () => {
-  const allColors = getAllSpeakerColors();
+  const { mode: themeMode } = useAppSelector(state => state.theme);
+  const allColors = getAllSpeakerColors(themeMode === 'dark');
 
   return (
     <Paper sx={{ p: 3, borderRadius: 3 }}>
@@ -52,7 +54,7 @@ const SpeakerColorDemo: React.FC = () => {
         ))}
       </Grid>
       
-      <Box sx={{ mt: 3, p: 2, backgroundColor: 'grey.50', borderRadius: 2 }}>
+      <Box sx={{ mt: 3, p: 2, backgroundColor: themeMode === 'dark' ? 'grey.800' : 'grey.50', borderRadius: 2 }}>
         <Typography variant="body2" color="text.secondary">
           <strong>Note:</strong> Colors are automatically assigned based on speaker names. 
           Unknown speakers will use a default gray color scheme.

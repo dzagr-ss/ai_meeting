@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { API_URL } from '../utils/api';
 import {
   Box,
@@ -147,6 +147,34 @@ const decodeHtmlEntities = (text: string): string => {
 const MeetingRoom: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const token = useAppSelector(state => state.auth.token);
+  const { mode: themeMode } = useAppSelector(state => state.theme);
+
+  // Helper function for custom scrollbar styles
+  const getScrollbarStyles = () => ({
+    // Custom scrollbar styling for theme compatibility
+    '&::-webkit-scrollbar': {
+      width: '8px',
+    },
+    '&::-webkit-scrollbar-track': {
+      backgroundColor: themeMode === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
+      borderRadius: '4px',
+    },
+    '&::-webkit-scrollbar-thumb': {
+      backgroundColor: themeMode === 'dark' ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+      borderRadius: '4px',
+      '&:hover': {
+        backgroundColor: themeMode === 'dark' ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)',
+      },
+    },
+    '&::-webkit-scrollbar-corner': {
+      backgroundColor: themeMode === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
+    },
+    // Firefox scrollbar styling
+    scrollbarWidth: 'thin',
+    scrollbarColor: themeMode === 'dark' 
+      ? 'rgba(255, 255, 255, 0.2) rgba(255, 255, 255, 0.05)' 
+      : 'rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05)',
+  });
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
@@ -176,7 +204,7 @@ const MeetingRoom: React.FC = () => {
   };
 
   // Load meeting data
-  const loadMeetingData = async () => {
+  const loadMeetingData = useCallback(async () => {
     if (!id || !token) return;
     
     try {
@@ -194,7 +222,7 @@ const MeetingRoom: React.FC = () => {
     } catch (error) {
       console.error('Error loading meeting data:', error);
     }
-  };
+  }, [id, token]);
 
   const handleTagsUpdated = (updatedTags: Tag[]) => {
     if (meeting) {
@@ -332,21 +360,33 @@ const MeetingRoom: React.FC = () => {
   };
 
   // Combine stored transcriptions and live transcriptions
-  const liveSegments = transcriptions.reduce((acc, t) => acc.concat(t.segments), [] as TranscriptionSegment[]);
+  const liveSegments = useMemo(() => 
+    transcriptions.reduce((acc, t) => acc.concat(t.segments), [] as TranscriptionSegment[]),
+    [transcriptions]
+  );
   
   // Convert stored transcriptions to segment format
-  const storedSegments: TranscriptionSegment[] = storedTranscriptions.map((stored, index) => ({
-    speaker: decodeHtmlEntities(stored.speaker),
-    start_time: index * 10, // Approximate timing for stored transcriptions
-    end_time: (index + 1) * 10,
-    text: decodeHtmlEntities(stored.text),
-  }));
+  const storedSegments = useMemo((): TranscriptionSegment[] => 
+    storedTranscriptions.map((stored, index) => ({
+      speaker: decodeHtmlEntities(stored.speaker),
+      start_time: index * 10, // Approximate timing for stored transcriptions
+      end_time: (index + 1) * 10,
+      text: decodeHtmlEntities(stored.text),
+    })),
+    [storedTranscriptions]
+  );
   
   // Combine all segments (stored first, then live)
-  const allSegments = [...storedSegments, ...liveSegments];
-  const speakerSet = new Set<string>();
-  allSegments.forEach(s => speakerSet.add(s.speaker));
-  const uniqueSpeakers = Array.from(speakerSet);
+  const allSegments = useMemo(() => 
+    [...storedSegments, ...liveSegments],
+    [storedSegments, liveSegments]
+  );
+  
+  const uniqueSpeakers = useMemo(() => {
+    const speakerSet = new Set<string>();
+    allSegments.forEach(s => speakerSet.add(s.speaker));
+    return Array.from(speakerSet);
+  }, [allSegments]);
 
   // Auto-scroll to bottom when new live transcriptions are added
   useEffect(() => {
@@ -651,7 +691,12 @@ const MeetingRoom: React.FC = () => {
                 </Box>
               </Box>
               <Divider />
-              <Box sx={{ p: 3, height: { xs: '400px', lg: '600px' }, overflowY: 'auto' }} key={`transcriptions-${refreshKey}`} ref={transcriptionScrollRef} onScroll={handleScroll}>
+              <Box sx={{ 
+                p: 3, 
+                height: { xs: '400px', lg: '600px' }, 
+                overflowY: 'auto',
+                ...getScrollbarStyles(),
+              }} key={`transcriptions-${refreshKey}`} ref={transcriptionScrollRef} onScroll={handleScroll}>
                 {loadingStoredTranscriptions && (
                   <Alert severity="info" sx={{ mb: 2 }}>
                     Loading previous transcriptions...
@@ -686,12 +731,12 @@ const MeetingRoom: React.FC = () => {
                                 size="small"
                                 variant="outlined"
                                 sx={{
-                                  color: getSpeakerColor(segment.speaker).color,
-                                  backgroundColor: getSpeakerColor(segment.speaker).backgroundColor,
-                                  borderColor: getSpeakerColor(segment.speaker).borderColor,
+                                  color: getSpeakerColor(segment.speaker, themeMode === 'dark').color,
+                                  backgroundColor: getSpeakerColor(segment.speaker, themeMode === 'dark').backgroundColor,
+                                  borderColor: getSpeakerColor(segment.speaker, themeMode === 'dark').borderColor,
                                   fontWeight: 600,
                                   '&:hover': {
-                                    backgroundColor: getSpeakerColor(segment.speaker).backgroundColor,
+                                    backgroundColor: getSpeakerColor(segment.speaker, themeMode === 'dark').backgroundColor,
                                   }
                                 }}
                               />
@@ -727,9 +772,9 @@ const MeetingRoom: React.FC = () => {
                             sx={{ 
                               p: 2, 
                               borderRadius: 2, 
-                              backgroundColor: index % 2 === 0 ? 'grey.50' : 'transparent',
+                              backgroundColor: index % 2 === 0 ? (themeMode === 'dark' ? 'grey.800' : 'grey.50') : 'transparent',
                               border: '1px solid',
-                              borderColor: 'grey.200',
+                                                              borderColor: themeMode === 'dark' ? 'grey.700' : 'grey.200',
                               mb: 1,
                             }}
                           >
@@ -739,12 +784,12 @@ const MeetingRoom: React.FC = () => {
                                 size="small"
                                 variant="outlined"
                                 sx={{
-                                  color: getSpeakerColor(segment.speaker).color,
-                                  backgroundColor: getSpeakerColor(segment.speaker).backgroundColor,
-                                  borderColor: getSpeakerColor(segment.speaker).borderColor,
+                                  color: getSpeakerColor(segment.speaker, themeMode === 'dark').color,
+                                  backgroundColor: getSpeakerColor(segment.speaker, themeMode === 'dark').backgroundColor,
+                                  borderColor: getSpeakerColor(segment.speaker, themeMode === 'dark').borderColor,
                                   fontWeight: 600,
                                   '&:hover': {
-                                    backgroundColor: getSpeakerColor(segment.speaker).backgroundColor,
+                                    backgroundColor: getSpeakerColor(segment.speaker, themeMode === 'dark').backgroundColor,
                                   }
                                 }}
                               />
@@ -890,7 +935,7 @@ const MeetingRoom: React.FC = () => {
 
               {/* Summary Tab */}
               <TabPanel value={activeTab} index={0}>
-                <Box sx={{ height: { xs: '480px', lg: '580px' }, overflowY: 'auto', pr: 1 }}>
+                <Box sx={{ height: { xs: '480px', lg: '580px' }, overflowY: 'auto', pr: 1, ...getScrollbarStyles() }}>
                   {summary ? (
                     <Box sx={{
                       '& h1, & h2, & h3, & h4, & h5, & h6': {
@@ -943,7 +988,7 @@ const MeetingRoom: React.FC = () => {
                         marginTop: 2,
                         marginBottom: 2,
                         fontStyle: 'italic',
-                        backgroundColor: 'grey.50',
+                        backgroundColor: themeMode === 'dark' ? 'grey.800' : 'grey.50',
                         padding: 2,
                         borderRadius: 1
                       }
@@ -969,7 +1014,7 @@ const MeetingRoom: React.FC = () => {
 
               {/* Meeting Notes Tab */}
               <TabPanel value={activeTab} index={1}>
-                <Box sx={{ height: { xs: '480px', lg: '580px' }, overflowY: 'auto', pr: 1 }}>
+                <Box sx={{ height: { xs: '480px', lg: '580px' }, overflowY: 'auto', pr: 1, ...getScrollbarStyles() }}>
                   {meetingNotes ? (
                     <Box sx={{
                       '& h1, & h2, & h3, & h4, & h5, & h6': {
@@ -1022,7 +1067,7 @@ const MeetingRoom: React.FC = () => {
                         marginTop: 2,
                         marginBottom: 2,
                         fontStyle: 'italic',
-                        backgroundColor: 'grey.50',
+                        backgroundColor: themeMode === 'dark' ? 'grey.800' : 'grey.50',
                         padding: 2,
                         borderRadius: 1
                       }
@@ -1048,7 +1093,7 @@ const MeetingRoom: React.FC = () => {
 
               {/* Action Items Tab */}
               <TabPanel value={activeTab} index={2}>
-                <Box sx={{ height: { xs: '480px', lg: '580px' }, overflowY: 'auto', pr: 1 }}>
+                <Box sx={{ height: { xs: '480px', lg: '580px' }, overflowY: 'auto', pr: 1, ...getScrollbarStyles() }}>
                   {actionItems ? (
                     <Box sx={{
                       '& h1, & h2, & h3, & h4, & h5, & h6': {
@@ -1101,7 +1146,7 @@ const MeetingRoom: React.FC = () => {
                         marginTop: 2,
                         marginBottom: 2,
                         fontStyle: 'italic',
-                        backgroundColor: 'grey.50',
+                        backgroundColor: themeMode === 'dark' ? 'grey.800' : 'grey.50',
                         padding: 2,
                         borderRadius: 1
                       }

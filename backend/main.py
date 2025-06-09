@@ -256,10 +256,18 @@ app = FastAPI(
 # Record app start time for health check uptime calculation
 app_start_time = time.time()
 
-# Rate limiter setup with Redis backend for production
+# Rate limiter setup with environment-aware limits
+def get_rate_limit(dev_limit: str, prod_limit: str) -> str:
+    """Get rate limit based on environment"""
+    is_dev = os.getenv("ENVIRONMENT", "development") == "development"
+    return dev_limit if is_dev else prod_limit
+
+# For development, use extremely high limits or disable rate limiting
+is_development = os.getenv("ENVIRONMENT", "development") == "development"
+
 limiter = Limiter(
     key_func=get_remote_address,
-    default_limits=["1000/day", "100/hour"]  # Global default limits
+    default_limits=["100000/day", "10000/hour"] if is_development else ["1000/day", "100/hour"]
 )
 app.state.limiter = limiter
 
@@ -1155,7 +1163,7 @@ def create_meeting(
     return crud.create_meeting(db=db, meeting=meeting, user_id=current_user.id)
 
 @app.get("/meetings/", response_model=List[schemas.Meeting])
-@limiter.limit("60/minute")  # Read operations
+@limiter.limit(get_rate_limit("10000/minute", "60/minute"))  # Read operations
 def get_meetings(
     request: Request,
     skip: int = 0,
@@ -1194,7 +1202,7 @@ def delete_meeting(
     return {"message": "Meeting deleted successfully"}
 
 @app.get("/meetings/{meeting_id}/transcriptions", response_model=List[schemas.Transcription])
-@limiter.limit("60/minute")  # Read operations
+@limiter.limit(get_rate_limit("10000/minute", "60/minute"))  # Read operations
 def get_meeting_transcriptions(
     request: Request,
     meeting_id: int,
@@ -1946,7 +1954,7 @@ async def summarize_audio(request: Request, audio: UploadFile = File(...)):
     return JSONResponse({"summary": summary})
 
 @app.get("/meetings/{meeting_id}/summaries", response_model=List[schemas.Summary])
-@limiter.limit("30/minute")  # Read operations
+@limiter.limit(get_rate_limit("5000/minute", "30/minute"))  # Read operations
 def get_meeting_summaries(
     request: Request,
     meeting_id: int,
@@ -1970,7 +1978,7 @@ def get_meeting_summaries(
     return summaries
 
 @app.get("/meetings/{meeting_id}/notes", response_model=List[schemas.MeetingNotes])
-@limiter.limit("30/minute")  # Read operations
+@limiter.limit(get_rate_limit("5000/minute", "30/minute"))  # Read operations
 def get_meeting_notes_endpoint(
     request: Request,
     meeting_id: int,
@@ -1994,7 +2002,7 @@ def get_meeting_notes_endpoint(
     return meeting_notes
 
 @app.get("/meetings/{meeting_id}/status")
-@limiter.limit("60/minute")  # Status checks
+@limiter.limit(get_rate_limit("10000/minute", "60/minute"))  # Status checks
 def get_meeting_status_endpoint(
     request: Request,
     meeting_id: int,
@@ -3416,7 +3424,7 @@ def create_tag(
     return crud.create_tag(db=db, tag=tag)
 
 @app.get("/tags/", response_model=List[schemas.Tag])
-@limiter.limit("60/minute")  # Read operations
+@limiter.limit(get_rate_limit("10000/minute", "60/minute"))  # Read operations
 def get_tags(
     request: Request,
     skip: int = 0,

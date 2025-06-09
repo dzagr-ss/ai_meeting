@@ -6,10 +6,10 @@ export interface SpeakerColorScheme {
 
 /**
  * Get consistent color scheme for each speaker
- * Uses a muted, professional color palette that fits the site design
+ * Uses a muted, professional color palette that adapts to theme mode
  */
-export const getSpeakerColor = (speaker: string): SpeakerColorScheme => {
-  const speakerColors: Record<string, SpeakerColorScheme> = {
+export const getSpeakerColor = (speaker: string, isDarkMode: boolean = false): SpeakerColorScheme => {
+  const lightModeColors: Record<string, SpeakerColorScheme> = {
     'Speaker_1': {
       color: '#4f46e5', // Indigo
       backgroundColor: 'rgba(79, 70, 229, 0.08)',
@@ -62,24 +62,86 @@ export const getSpeakerColor = (speaker: string): SpeakerColorScheme => {
     }
   };
 
-  // Default color for unknown speakers
-  const defaultColor: SpeakerColorScheme = {
+  const darkModeColors: Record<string, SpeakerColorScheme> = {
+    'Speaker_1': {
+      color: '#8b5cf6', // Brighter violet for dark mode
+      backgroundColor: 'rgba(139, 92, 246, 0.15)',
+      borderColor: 'rgba(139, 92, 246, 0.4)'
+    },
+    'Speaker_2': {
+      color: '#10b981', // Brighter emerald
+      backgroundColor: 'rgba(16, 185, 129, 0.15)',
+      borderColor: 'rgba(16, 185, 129, 0.4)'
+    },
+    'Speaker_3': {
+      color: '#f87171', // Lighter red for better contrast
+      backgroundColor: 'rgba(248, 113, 113, 0.15)',
+      borderColor: 'rgba(248, 113, 113, 0.4)'
+    },
+    'Speaker_4': {
+      color: '#fb923c', // Brighter orange
+      backgroundColor: 'rgba(251, 146, 60, 0.15)',
+      borderColor: 'rgba(251, 146, 60, 0.4)'
+    },
+    'Speaker_5': {
+      color: '#a78bfa', // Lighter violet
+      backgroundColor: 'rgba(167, 139, 250, 0.15)',
+      borderColor: 'rgba(167, 139, 250, 0.4)'
+    },
+    'Speaker_6': {
+      color: '#22d3ee', // Brighter cyan
+      backgroundColor: 'rgba(34, 211, 238, 0.15)',
+      borderColor: 'rgba(34, 211, 238, 0.4)'
+    },
+    'Speaker_7': {
+      color: '#f472b6', // Lighter pink
+      backgroundColor: 'rgba(244, 114, 182, 0.15)',
+      borderColor: 'rgba(244, 114, 182, 0.4)'
+    },
+    'Speaker_8': {
+      color: '#60a5fa', // Lighter blue
+      backgroundColor: 'rgba(96, 165, 250, 0.15)',
+      borderColor: 'rgba(96, 165, 250, 0.4)'
+    },
+    'Speaker_9': {
+      color: '#84cc16', // Brighter lime
+      backgroundColor: 'rgba(132, 204, 22, 0.15)',
+      borderColor: 'rgba(132, 204, 22, 0.4)'
+    },
+    'Speaker_10': {
+      color: '#e879f9', // Brighter fuchsia
+      backgroundColor: 'rgba(232, 121, 249, 0.15)',
+      borderColor: 'rgba(232, 121, 249, 0.4)'
+    }
+  };
+
+  // Default colors for unknown speakers
+  const defaultLightColor: SpeakerColorScheme = {
     color: '#6b7280', // Gray
     backgroundColor: 'rgba(107, 114, 128, 0.08)',
     borderColor: 'rgba(107, 114, 128, 0.3)'
   };
 
+  const defaultDarkColor: SpeakerColorScheme = {
+    color: '#9ca3af', // Lighter gray for dark mode
+    backgroundColor: 'rgba(156, 163, 175, 0.15)',
+    borderColor: 'rgba(156, 163, 175, 0.4)'
+  };
+
+  const speakerColors = isDarkMode ? darkModeColors : lightModeColors;
+  const defaultColor = isDarkMode ? defaultDarkColor : defaultLightColor;
+
   return speakerColors[speaker] || defaultColor;
 };
 
 /**
- * Get all available speaker colors
+ * Get all available speaker colors for a specific theme mode
  */
-export const getAllSpeakerColors = (): Record<string, SpeakerColorScheme> => {
+export const getAllSpeakerColors = (isDarkMode: boolean = false): Record<string, SpeakerColorScheme> => {
   const colors: Record<string, SpeakerColorScheme> = {};
   for (let i = 1; i <= 10; i++) {
     const speaker = `Speaker_${i}`;
-    colors[speaker] = getSpeakerColor(speaker);
+    colors[speaker] = getSpeakerColor(speaker, isDarkMode);
   }
   return colors;
 }; 

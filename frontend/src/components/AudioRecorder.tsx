@@ -25,7 +25,8 @@ import {
   AudioFile,
   EventAvailable,
 } from '@mui/icons-material';
-import { useAppSelector } from '../store/hooks';
+import { useAppSelector, useAppDispatch } from '../store/hooks';
+import { validateToken } from '../store/slices/authSlice';
 import { fetchWithAuth } from '../utils/api';
 import AudioVisualizer from './AudioVisualizer';
 
@@ -158,6 +159,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
     const analyserRef = useRef<AnalyserNode | null>(null);
     const animationFrameRef = useRef<number>();
     const token = useAppSelector(state => state.auth.token);
+    const dispatch = useAppDispatch();
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -404,6 +406,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
     }, [isRecording, detectAudioLevel]);
 
     const connectWebSocket = async () => {
+        // Validate token before attempting connection
+        dispatch(validateToken());
+        
         if (!token) {
             setError('Authentication token not found');
             return false;
@@ -414,8 +419,31 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
 
         try {
             console.log('Connecting to WebSocket...');
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//aimeeting.up.railway.app/ws/meetings/${meetingId}/stream`;
+            
+            // Use environment-aware WebSocket URL similar to API_URL
+            const getWebSocketUrl = (): string => {
+                // If we have an API URL, derive WebSocket URL from it
+                const apiUrl = API_URL;
+                let wsBaseUrl: string;
+                
+                if (apiUrl.includes('localhost')) {
+                    // Development
+                    wsBaseUrl = 'ws://localhost:8000';
+                } else if (apiUrl.includes('https://')) {
+                    // Production with HTTPS
+                    wsBaseUrl = apiUrl.replace('https://', 'wss://');
+                } else if (apiUrl.includes('http://')) {
+                    // HTTP (shouldn't happen in production)
+                    wsBaseUrl = apiUrl.replace('http://', 'ws://');
+                } else {
+                    // Fallback
+                    wsBaseUrl = 'wss://aimeeting.up.railway.app';
+                }
+                
+                return `${wsBaseUrl}/ws/meetings/${meetingId}/stream`;
+            };
+            
+            const wsUrl = getWebSocketUrl();
             console.log('WebSocket URL:', wsUrl);
             
             const ws = new WebSocket(wsUrl);
@@ -484,14 +512,12 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ meetingId, onTranscriptio
                 console.log('WebSocket closed:', event.code, event.reason);
                 if (event.code === 1008) {
                     if (event.reason === 'Token has expired' || event.reason === 'Invalid or expired token') {
-                        setError('Session expired. Please log in again.');
-                        // Import and dispatch logout action
-                        import('../store/slices/authSlice').then(({ logout }) => {
-                            import('../store').then(({ store }) => {
-                                store.dispatch(logout());
-                                window.location.href = '/login';
-                            });
-                        });
+                        setError('Your session has expired. Please log in again to continue recording.');
+                        // Use the dispatch we have available instead of importing
+                        dispatch(validateToken()); // This will clear the invalid token
+                        setTimeout(() => {
+                            window.location.href = '/login';
+                        }, 2000); // Give user time to read the message
                     } else {
                         setError(`Authentication failed: ${event.reason || 'Unknown reason'}`);
                     }
