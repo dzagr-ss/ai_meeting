@@ -3,12 +3,14 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import { Box, CssBaseline, Snackbar, Alert } from '@mui/material';
 import { ThemeProvider } from '@mui/material/styles';
+import { Analytics } from '@vercel/analytics/react';
 import { RootState } from './store';
 import { validateToken } from './store/slices/authSlice';
 import { createAppTheme } from './theme';
 
 // Components
 import Navbar from './components/Navbar';
+import LandingPage from './pages/LandingPage';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
@@ -91,7 +93,7 @@ const App: React.FC = () => {
             />
             <Route
               path="/"
-              element={isAuthenticated ? <Navigate to="/dashboard" /> : <Navigate to="/login" />}
+              element={isAuthenticated ? <Navigate to="/dashboard" /> : <LandingPage />}
             />
             <Route
               path="/dashboard"
@@ -128,6 +130,7 @@ const App: React.FC = () => {
             {tokenExpiredMessage}
           </Alert>
         </Snackbar>
+        {process.env.NODE_ENV === 'production' && <Analytics />}
       </Box>
     </ThemeProvider>
   );

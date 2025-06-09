@@ -8,7 +8,6 @@ import {
   TextField,
   Box,
   Autocomplete,
-  Chip,
   Typography,
   IconButton,
   Alert,
