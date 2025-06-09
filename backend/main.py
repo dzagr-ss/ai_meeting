@@ -2408,7 +2408,7 @@ def summarize_with_gemini_multiple_files(audio_files: List[str]) -> dict:
         
         # Prepare the prompt and content for structured output (without action items)
         file_list = ", ".join([f.split('/')[-1] for f in audio_files])
-        prompt = f"""Analyze this meeting audio and provide a structured response with the following sections:
+        prompt = f"""Analyze this meeting audio and provide a structured response with the following sections. Please respond in English only.
 
 1. **SUMMARY**: A concise overview of the meeting's main points and outcomes
 2. **MEETING NOTES**: Detailed notes covering key discussions, decisions, and important points mentioned
@@ -2499,7 +2499,7 @@ def summarize_with_gemini(wav_path: str) -> str:
     model = genai.GenerativeModel("models/gemini-1.5-pro-latest")
 
     # Prepare the prompt and content (use 'parts' with correct keys)
-    prompt = "Summarize the main points and action items from this meeting audio."
+    prompt = "Summarize the main points and action items from this meeting audio. Please respond in English only."
     parts = [
         {"text": prompt},
         {"inline_data": {"mime_type": "audio/wav", "data": base64_audio}},
@@ -2549,7 +2549,7 @@ async def generate_action_items_with_chatgpt(meeting_id: int, db: Session) -> st
             client = OpenAI(api_key=settings.OPENAI_API_KEY)
         
         # Improved prompt for action items extraction
-        prompt = """I will give you a meeting transcription. Please analyze it and prepare a comprehensive list of action items.
+        prompt = """I will give you a meeting transcription. Please analyze it and prepare a comprehensive list of action items. Please respond in English only.
 
 For each action item, please include:
 - The specific task or action to be taken
@@ -2567,7 +2567,7 @@ Here is the meeting transcription:"""
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are an expert meeting analyst specializing in extracting actionable items from meeting transcripts. You provide clear, organized, and comprehensive action item lists."
+                    "content": "You are an expert meeting analyst specializing in extracting actionable items from meeting transcripts. You provide clear, organized, and comprehensive action item lists. Always respond in English only."
                 },
                 {
                     "role": "user", 
@@ -2638,7 +2638,7 @@ async def generate_summary_with_openai(meeting_id: int, db: Session) -> dict:
             client = OpenAI(api_key=settings.OPENAI_API_KEY)
         
         # Generate summary
-        summary_prompt = """I will give you a meeting transcription. Please analyze it and provide a concise summary of the main points and outcomes.
+        summary_prompt = """I will give you a meeting transcription. Please analyze it and provide a concise summary of the main points and outcomes. Please respond in English only.
 
 Focus on:
 - Key topics discussed
@@ -2653,7 +2653,7 @@ Here is the meeting transcription:"""
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are an expert meeting analyst specializing in creating concise, informative summaries of meeting content."
+                    "content": "You are an expert meeting analyst specializing in creating concise, informative summaries of meeting content. Always respond in English only."
                 },
                 {
                     "role": "user", 
@@ -2665,7 +2665,7 @@ Here is the meeting transcription:"""
         )
         
         # Generate detailed meeting notes
-        notes_prompt = """I will give you a meeting transcription. Please analyze it and provide detailed meeting notes covering key discussions, decisions, and important points mentioned.
+        notes_prompt = """I will give you a meeting transcription. Please analyze it and provide detailed meeting notes covering key discussions, decisions, and important points mentioned. Please respond in English only.
 
 Structure the notes with:
 - Key discussion points
@@ -2681,7 +2681,7 @@ Here is the meeting transcription:"""
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are an expert meeting analyst specializing in creating comprehensive, well-structured meeting notes."
+                    "content": "You are an expert meeting analyst specializing in creating comprehensive, well-structured meeting notes. Always respond in English only."
                 },
                 {
                     "role": "user", 
@@ -3698,7 +3698,7 @@ async def generate_tags_with_chatgpt(meeting_id: int, db: Session) -> List[str]:
             client = OpenAI(api_key=settings.OPENAI_API_KEY)
         
         # Prompt for tag generation
-        prompt = """I will give you meeting content (transcriptions and summary). Please analyze it and generate 2-5 relevant tags that best categorize this meeting.
+        prompt = """I will give you meeting content (transcriptions and summary). Please analyze it and generate 2-5 relevant tags that best categorize this meeting. Please respond in English only.
 
 The tags should be:
 - Short (1-3 words each)
@@ -3718,7 +3718,7 @@ Here is the meeting content:"""
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are an expert at categorizing and tagging meeting content. You generate concise, relevant tags that help organize meetings effectively."
+                    "content": "You are an expert at categorizing and tagging meeting content. You generate concise, relevant tags that help organize meetings effectively. Always respond in English only."
                 },
                 {
                     "role": "user", 

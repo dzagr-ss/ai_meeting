@@ -631,7 +631,7 @@ class VoiceNotesApp {
 
       this.recordingStatus.textContent = 'Polishing note...';
 
-      const prompt = `Take this raw transcription and create a polished, well-formatted note.
+      const prompt = `Take this raw transcription and create a polished, well-formatted note. Please respond in English only.
                     Remove filler words (um, uh, like), repetitions, and false starts.
                     Format any lists or bullet points properly. Use markdown formatting for headings, lists, etc.
                     Maintain all the original content and meaning.
@@ -841,7 +841,7 @@ export async function summarizeAudioFile(
   });
 
   // Prompt for summary
-  const prompt = 'Summarize the main points and action items from this meeting audio.';
+  const prompt = 'Summarize the main points and action items from this meeting audio. Please respond in English only.';
 
   const contents = [
     { text: prompt },

@@ -311,6 +311,7 @@ async def process_audio(db: Session, meeting_id: int, audio_data: schemas.AudioD
                 response = client.audio.transcriptions.create(
                     model="whisper-1",
                     file=audio_file,
+                    language="en",
                     response_format="verbose_json"
                 )
         
@@ -364,7 +365,7 @@ async def generate_action_items(text: str) -> list:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Extract action items from the following meeting transcript. Return them as a list, one item per line."},
+                {"role": "system", "content": "Extract action items from the following meeting transcript. Return them as a list, one item per line. Always respond in English only."},
                 {"role": "user", "content": text}
             ]
         )
