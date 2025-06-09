@@ -21,6 +21,7 @@ import {
 } from '@mui/material';
 import { AdminPanelSettings, Person, CheckCircle, Pending, Star } from '@mui/icons-material';
 import api from '../utils/api';
+import { useTheme } from '@mui/material/styles';
 
 interface AdminUser {
   id: number;
@@ -31,6 +32,7 @@ interface AdminUser {
 }
 
 const AdminPanel: React.FC = () => {
+  const theme = useTheme();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -154,7 +156,9 @@ const AdminPanel: React.FC = () => {
         <TableContainer component={Paper} elevation={2}>
           <Table>
             <TableHead>
-              <TableRow sx={{ backgroundColor: 'grey.50' }}>
+              <TableRow sx={{ 
+                backgroundColor: theme.palette.mode === 'dark' ? 'grey.800' : 'grey.50'
+              }}>
                 <TableCell><strong>User</strong></TableCell>
                 <TableCell><strong>Email</strong></TableCell>
                 <TableCell><strong>Current Type</strong></TableCell>
