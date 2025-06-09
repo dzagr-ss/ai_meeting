@@ -1,0 +1,167 @@
+import pytest
+import tempfile
+import os
+from typing import Generator
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+# Set environment variables for testing BEFORE imports
+os.environ["DATABASE_URL"] = "sqlite:///./test.db"
+os.environ["SECRET_KEY"] = "this-is-a-test-secret-key-with-more-than-32-characters"
+os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = "30"
+os.environ["OPENAI_API_KEY"] = "sk-test-key-for-testing-only-not-real"
+os.environ["TESTING"] = "true"
+
+# Import modules from your app
+import models
+from database import Base, get_db
+import crud
+import schemas
+
+# Import app after setting environment variables
+from main import app
+
+# Test database configuration
+
+# Create test database engine
+SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL, 
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Override the get_db dependency
+def override_get_db():
+    try:
+        db = TestingSessionLocal()
+        yield db
+    finally:
+        db.close()
+
+app.dependency_overrides[get_db] = override_get_db
+
+@pytest.fixture(scope="session")
+def db_engine():
+    """Create test database engine"""
+    Base.metadata.create_all(bind=engine)
+    yield engine
+    Base.metadata.drop_all(bind=engine)
+
+@pytest.fixture(scope="function")
+def db_session(db_engine):
+    """Create a clean database session for each test"""
+    connection = db_engine.connect()
+    transaction = connection.begin()
+    session = TestingSessionLocal(bind=connection)
+    
+    yield session
+    
+    session.close()
+    transaction.rollback()
+    connection.close()
+
+@pytest.fixture(scope="function")
+def client():
+    """Create test client"""
+    with TestClient(app) as test_client:
+        yield test_client
+
+@pytest.fixture
+def test_user_data():
+    """Test user data"""
+    return {
+        "email": "test@example.com",
+        "password": "TestPassword123!"
+    }
+
+@pytest.fixture
+def test_admin_user_data():
+    """Test admin user data"""
+    return {
+        "email": "zagravsky@gmail.com",
+        "password": "AdminPassword123!"
+    }
+
+@pytest.fixture
+def test_user(db_session, test_user_data):
+    """Create a test user"""
+    user_create = schemas.UserCreate(**test_user_data)
+    user = crud.create_user(db_session, user_create)
+    return user
+
+@pytest.fixture  
+def test_admin_user(db_session, test_admin_user_data):
+    """Create a test admin user"""
+    user_create = schemas.UserCreate(**test_admin_user_data)
+    user = crud.create_user(db_session, user_create)
+    return user
+
+@pytest.fixture
+def test_meeting_data():
+    """Test meeting data"""
+    return {
+        "title": "Test Meeting",
+        "description": "This is a test meeting"
+    }
+
+@pytest.fixture
+def test_meeting(db_session, test_user, test_meeting_data):
+    """Create a test meeting"""
+    meeting_create = schemas.MeetingCreate(**test_meeting_data)
+    meeting = crud.create_meeting(db_session, meeting_create, test_user.id)
+    return meeting
+
+@pytest.fixture
+def test_tag_data():
+    """Test tag data"""
+    return {
+        "name": "test-tag",
+        "color": "#ff0000"
+    }
+
+@pytest.fixture
+def test_tag(db_session, test_tag_data):
+    """Create a test tag"""
+    tag_create = schemas.TagCreate(**test_tag_data)
+    tag = crud.create_tag(db_session, tag_create)
+    return tag
+
+@pytest.fixture
+def auth_headers(client, test_user_data):
+    """Get authentication headers for test user"""
+    response = client.post("/token", json=test_user_data)
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+@pytest.fixture
+def admin_auth_headers(client, test_admin_user_data):
+    """Get authentication headers for admin user"""
+    response = client.post("/token", json=test_admin_user_data)
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+@pytest.fixture
+def sample_audio_file():
+    """Create a sample audio file for testing"""
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        # Create minimal WAV file content
+        wav_header = b'RIFF\x24\x00\x00\x00WAVE'
+        f.write(wav_header)
+        yield f.name
+    os.unlink(f.name)
+
+@pytest.fixture(autouse=True)
+def cleanup_test_files():
+    """Clean up test files after each test"""
+    yield
+    # Clean up any test files created during testing
+    for file in os.listdir("."):
+        if file.startswith("test_") and (file.endswith(".wav") or file.endswith(".mp3")):
+            try:
+                os.unlink(file)
+            except FileNotFoundError:
+                pass 
