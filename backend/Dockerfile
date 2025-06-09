@@ -79,5 +79,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=2 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Railway startup command with PORT variable support
-CMD ["sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
+# Railway startup command with migrations
+CMD ["./start.sh"]
